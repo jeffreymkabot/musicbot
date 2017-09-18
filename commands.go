@@ -1,9 +1,13 @@
 package music
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 
+	"github.com/boltdb/bolt"
 	dgv "github.com/jeffreymkabot/aoebot/discordvoice"
 	"github.com/jonas747/dca"
 	"github.com/rylio/ytdl"
@@ -40,6 +44,19 @@ var encodeOptions = &dca.EncodeOptions{
 	VBR:              true,
 }
 
+type audiosession struct {
+	*http.Response
+	*dca.EncodeSession
+}
+
+func athing(io.Closer) {}
+
+func (p audiosession) Close() error {
+	p.Body.Close()
+	p.Cleanup()
+	return nil
+}
+
 var youtube = &command{
 	name:                "youtube",
 	isListenChannelOnly: true,
@@ -70,11 +87,29 @@ var youtube = &command{
 		}
 
 		encoder, err := dca.EncodeMem(resp.Body, encodeOptions)
-		g.queue <- &dgv.Payload{
+		as := audiosession{resp, encoder}
+		payload := &dgv.Payload{
 			ChannelID: voiceChannelID,
-			Reader:    encoder,
+			Reader:    as,
+		}
+		select {
+		case g.send.Queue <- payload:
+		default:
+			as.Close()
+			return errors.New("queue is full for this guild")
 		}
 
+		return nil
+	},
+}
+
+var skip = &command{
+	name: "skip",
+	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+		// buffered channel so don't wait
+		log.Printf("send skip")
+		g.send.Skip <- struct{}{}
+		log.Printf("Sent skip")
 		return nil
 	},
 }
@@ -121,9 +156,23 @@ var setListen = &command{
 			return errors.New("channel please")
 		}
 		g.mu.Lock()
-		g.ListenChannels = append(g.ListenChannels, textChannelID)
+		if !contains(g.ListenChannels, textChannelID) {
+			g.ListenChannels = append(g.ListenChannels, textChannelID)
+		}
 		g.mu.Unlock()
 		// db
+		err := b.db.Update(func(tx *bolt.Tx) error {
+			bucket := tx.Bucket([]byte("guilds"))
+			val, err := json.Marshal(g.guildInfo)
+			if err != nil {
+				return err
+			}
+			return bucket.Put([]byte(g.guildID), val)
+		})
+		if err != nil {
+			return err
+		}
+		b.session.ChannelMessageSend(textChannelID, "ok")
 		return nil
 	},
 }
@@ -142,6 +191,18 @@ var unsetListen = &command{
 		}
 		g.mu.Unlock()
 		// db
+		err := b.db.Update(func(tx *bolt.Tx) error {
+			bucket := tx.Bucket([]byte("guilds"))
+			val, err := json.Marshal(g.guildInfo)
+			if err != nil {
+				return err
+			}
+			return bucket.Put([]byte(g.guildID), val)
+		})
+		if err != nil {
+			return err
+		}
+		b.session.ChannelMessageSend(textChannelID, "ok")
 		return nil
 	},
 }

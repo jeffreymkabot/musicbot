@@ -16,13 +16,13 @@ const (
 	Paused
 )
 
-const defaultPrefix = "##"
+const defaultPrefix = "#!"
 
 type guild struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	guildID string
 	state   int
-	queue   chan<- *dgv.Payload
+	send    dgv.Senders
 	quit    func()
 	guildInfo
 }
@@ -65,12 +65,13 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 		owner:   owner,
 		guilds:  make(map[string]*guild),
 		commands: []*command{
-			help,
+			// help,
 			youtube,
-			pause,
-			unpause,
-			stop,
-			setPrefix,
+			skip,
+			// pause,
+			// unpause,
+			// stop,
+			// setPrefix,
 			setListen,
 			unsetListen,
 		},
@@ -95,17 +96,13 @@ func (b *Bot) Stop() {
 }
 
 func (b *Bot) exec(cmd *command, g *guild, authorID string, textChannelID string, args []string) error {
-	goodChannel := !cmd.isListenChannelOnly
-	if !goodChannel {
-		for _, ch := range g.ListenChannels {
-			if ch == textChannelID {
-				goodChannel = true
-			}
-		}
+	g.mu.RLock()
+	if cmd.isListenChannelOnly && !contains(g.ListenChannels, textChannelID) {
+		g.mu.RUnlock()
+		log.Printf("command invoked in unregistered channel")
+		return nil
 	}
-	if !goodChannel {
-		return errors.New("unregistered command channel")
-	}
+	g.mu.RUnlock()
 
 	if cmd.isOwnerOnly && b.owner != authorID {
 		return errors.New("user not allowed to execute this command")
@@ -113,4 +110,13 @@ func (b *Bot) exec(cmd *command, g *guild, authorID string, textChannelID string
 
 	log.Printf("exec command %v in %v with %v\n", cmd.name, g.guildID, args)
 	return cmd.run(b, g, textChannelID, args)
+}
+
+func contains(s []string, t string) bool {
+	for _, v := range s {
+		if v == t {
+			return true
+		}
+	}
+	return false
 }

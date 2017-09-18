@@ -1,9 +1,12 @@
 package music
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 
+	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
 	dgv "github.com/jeffreymkabot/aoebot/discordvoice"
 )
@@ -21,6 +24,7 @@ func onReady(b *Bot) func(s *discordgo.Session, r *discordgo.Ready) {
 		}
 		s.AddHandler(onGuildCreate(b))
 		s.AddHandler(onMessageCreate(b))
+		s.UpdateStatus(0, fmt.Sprintf("%s youtube; %s skip", defaultPrefix, defaultPrefix))
 	}
 }
 
@@ -33,17 +37,32 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		if ok {
 			gu.quit()
 		}
+		gInfo := guildInfo{}
+		err := b.db.View(func(tx *bolt.Tx) error {
+			bucket := tx.Bucket([]byte("guilds"))
+			val := bucket.Get([]byte(g.ID))
+			if val == nil {
+				return nil
+			}
+			return json.Unmarshal(val, &gInfo)
+		})
+		if err != nil {
+			log.Printf("error lookup guild in db %v", err)
+		}
+		log.Printf("found existing guildinfo %#v", gInfo)
+
 		musicChannelID := guildMusicChannelID(s, g.ID)
 		log.Printf("music channel in %v: %v", g.ID, musicChannelID)
 		if musicChannelID == "" {
 			musicChannelID = g.AfkChannelID
 		}
-		queue, quit := dgv.Connect(s, g.ID, musicChannelID)
+		send, quit := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10), dgv.Skippable(true))
 		b.mu.Lock()
 		b.guilds[g.ID] = &guild{
 			guildID: g.ID,
-			queue:   queue,
+			send:    send,
 			quit:    quit,
+			guildInfo: gInfo,
 		}
 		b.mu.Unlock()
 	}
@@ -87,7 +106,7 @@ func onMessageCreate(b *Bot) func(s *discordgo.Session, m *discordgo.MessageCrea
 				if err != nil {
 					s.ChannelMessageSend(textChannel.ID, err.Error())
 				}
-				return 
+				return
 			}
 		}
 	}
