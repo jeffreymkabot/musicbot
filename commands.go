@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"github.com/boltdb/bolt"
-	dgv "github.com/jeffreymkabot/aoebot/discordvoice"
+	dgv "github.com/jeffreymkabot/discordvoice"
 	"github.com/jonas747/dca"
 	"github.com/rylio/ytdl"
 )

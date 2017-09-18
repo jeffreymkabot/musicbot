@@ -8,7 +8,7 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
-	dgv "github.com/jeffreymkabot/aoebot/discordvoice"
+	dgv "github.com/jeffreymkabot/discordvoice"
 )
 
 const musicChannelPrefix = "music"
@@ -59,9 +59,9 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		send, quit := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10), dgv.Skippable(true))
 		b.mu.Lock()
 		b.guilds[g.ID] = &guild{
-			guildID: g.ID,
-			send:    send,
-			quit:    quit,
+			guildID:   g.ID,
+			send:      send,
+			quit:      quit,
 			guildInfo: gInfo,
 		}
 		b.mu.Unlock()

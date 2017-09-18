@@ -7,7 +7,7 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
-	dgv "github.com/jeffreymkabot/aoebot/discordvoice"
+	dgv "github.com/jeffreymkabot/discordvoice"
 )
 
 const (
