@@ -3,7 +3,7 @@ package music
 import (
 	"encoding/json"
 	"errors"
-	"io"
+	"flag"
 	"log"
 	"net/http"
 
@@ -30,7 +30,7 @@ var help = &command{
 	},
 }
 
-var encodeOptions = &dca.EncodeOptions{
+var defaultEncodeOptions = dca.EncodeOptions{
 	Volume:           256,
 	Channels:         2,
 	FrameRate:        48000,
@@ -44,14 +44,13 @@ var encodeOptions = &dca.EncodeOptions{
 	VBR:              true,
 }
 
-type audiosession struct {
+type audioSession struct {
 	*http.Response
 	*dca.EncodeSession
 }
 
-func athing(io.Closer) {}
-
-func (p audiosession) Close() error {
+// implement io.Closer so dgv.payloadSender will cleanup 
+func (p audioSession) Close() error {
 	p.Body.Close()
 	p.Cleanup()
 	return nil
@@ -61,6 +60,14 @@ var youtube = &command{
 	name:                "youtube",
 	isListenChannelOnly: true,
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+		f := flag.NewFlagSet("youtube", flag.ContinueOnError)
+		vol := f.Int("vol", dca.StdEncodeOptions.Volume, "volume")
+		err := f.Parse(args)
+		if err != nil {
+			return err
+		}
+		args = f.Args()
+
 		if len(args) == 0 {
 			return errors.New("video please")
 		}
@@ -86,8 +93,12 @@ var youtube = &command{
 			return err
 		}
 
-		encoder, err := dca.EncodeMem(resp.Body, encodeOptions)
-		as := audiosession{resp, encoder}
+		opts := defaultEncodeOptions
+		if 0 < *vol && *vol <= 256 {
+			opts.Volume = *vol
+		}
+		encoder, err := dca.EncodeMem(resp.Body, &opts)
+		as := audioSession{resp, encoder}
 		payload := &dgv.Payload{
 			ChannelID: voiceChannelID,
 			Reader:    as,
@@ -108,8 +119,12 @@ var skip = &command{
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
 		// buffered channel so don't wait
 		log.Printf("send skip")
-		g.send.Skip <- struct{}{}
-		log.Printf("Sent skip")
+		select {
+		case g.send.Skip <- struct{}{}:
+			log.Printf("Sent skip")
+		default:
+			log.Printf("skip was fall")
+		}
 		return nil
 	},
 }
