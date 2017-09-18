@@ -1,0 +1,7 @@
+**/*.dca
+**/*.db
+**/*.db.lock
+**/*.bat
+**/*.sh
+**/*.toml
+!config.example.toml
