@@ -56,7 +56,7 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		if musicChannelID == "" {
 			musicChannelID = g.AfkChannelID
 		}
-		send, quit := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10), dgv.Skippable(true))
+		send, quit := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10))
 		b.mu.Lock()
 		b.guilds[g.ID] = &guild{
 			guildID:   g.ID,

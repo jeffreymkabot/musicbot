@@ -22,7 +22,7 @@ type guild struct {
 	mu      sync.RWMutex
 	guildID string
 	state   int
-	send    dgv.Senders
+	send    dgv.Sends
 	quit    func()
 	guildInfo
 }
@@ -68,8 +68,7 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 			// help,
 			youtube,
 			skip,
-			// pause,
-			// unpause,
+			togglepause,
 			// stop,
 			// setPrefix,
 			setListen,

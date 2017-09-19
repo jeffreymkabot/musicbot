@@ -3,13 +3,11 @@ package music
 import (
 	"encoding/json"
 	"errors"
-	"flag"
 	"log"
 	"net/http"
 
 	"github.com/boltdb/bolt"
 	dgv "github.com/jeffreymkabot/discordvoice"
-	"github.com/jonas747/dca"
 	"github.com/rylio/ytdl"
 )
 
@@ -30,43 +28,17 @@ var help = &command{
 	},
 }
 
-var defaultEncodeOptions = dca.EncodeOptions{
-	Volume:           256,
-	Channels:         2,
-	FrameRate:        48000,
-	FrameDuration:    20,
-	Bitrate:          128,
-	RawOutput:        true,
-	Application:      dca.AudioApplicationAudio,
-	CompressionLevel: 10,
-	PacketLoss:       1,
-	BufferedFrames:   100,
-	VBR:              true,
-}
-
-type audioSession struct {
-	*http.Response
-	*dca.EncodeSession
-}
-
-// implement io.Closer so dgv.payloadSender will cleanup 
-func (p audioSession) Close() error {
-	p.Body.Close()
-	p.Cleanup()
-	return nil
-}
-
 var youtube = &command{
 	name:                "youtube",
 	isListenChannelOnly: true,
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
-		f := flag.NewFlagSet("youtube", flag.ContinueOnError)
-		vol := f.Int("vol", dca.StdEncodeOptions.Volume, "volume")
-		err := f.Parse(args)
-		if err != nil {
-			return err
-		}
-		args = f.Args()
+		// f := flag.NewFlagSet("youtube", flag.ContinueOnError)
+		// vol := f.Int("vol", dca.StdEncodeOptions.Volume, "volume")
+		// err := f.Parse(args)
+		// if err != nil {
+		// 	return err
+		// }
+		// args = f.Args()
 
 		if len(args) == 0 {
 			return errors.New("video please")
@@ -93,20 +65,20 @@ var youtube = &command{
 			return err
 		}
 
-		opts := defaultEncodeOptions
-		if 0 < *vol && *vol <= 256 {
-			opts.Volume = *vol
-		}
-		encoder, err := dca.EncodeMem(resp.Body, &opts)
-		as := audioSession{resp, encoder}
+		// opts := defaultEncodeOptions
+		// if 0 < *vol && *vol <= 256 {
+		// 	opts.Volume = *vol
+		// }
+		// encoder, err := dca.EncodeMem(resp.Body, &opts)
+		// as := audioSession{resp, encoder}
 		payload := &dgv.Payload{
 			ChannelID: voiceChannelID,
-			Reader:    as,
+			Reader:    resp.Body,
 		}
 		select {
 		case g.send.Queue <- payload:
 		default:
-			as.Close()
+			resp.Body.Close()
 			return errors.New("queue is full for this guild")
 		}
 
@@ -120,25 +92,26 @@ var skip = &command{
 		// buffered channel so don't wait
 		log.Printf("send skip")
 		select {
-		case g.send.Skip <- struct{}{}:
+		case g.send.Control <- dgv.Skip:
 			log.Printf("Sent skip")
 		default:
-			log.Printf("skip was fall")
+			log.Printf("control was full")
 		}
 		return nil
 	},
 }
 
-var pause = &command{
-	name: "pause",
+var togglepause = &command{
+	name: "togglepause",
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
-		return nil
-	},
-}
-
-var unpause = &command{
-	name: "unpause",
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+		// buffered channel so don't wait
+		log.Printf("send pause")
+		select {
+		case g.send.Control <- dgv.Pause:
+			log.Printf("Sent pause")
+		default:
+			log.Printf("control was full")
+		}
 		return nil
 	},
 }
