@@ -24,7 +24,7 @@ func onReady(b *Bot) func(s *discordgo.Session, r *discordgo.Ready) {
 		}
 		s.AddHandler(onGuildCreate(b))
 		s.AddHandler(onMessageCreate(b))
-		s.UpdateStatus(0, fmt.Sprintf("%s youtube; %s skip", defaultPrefix, defaultPrefix))
+		s.UpdateStatus(0, fmt.Sprintf("%s youtube; %s skip; %s pause", defaultPrefix, defaultPrefix, defaultPrefix))
 	}
 }
 

@@ -29,7 +29,6 @@ type guild struct {
 
 type guildInfo struct {
 	Prefix string `json:"prefix"`
-	// PlayChannel    string   `json:"play"`
 	ListenChannels []string `json:"listen"`
 }
 
@@ -68,7 +67,7 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 			// help,
 			youtube,
 			skip,
-			togglepause,
+			pause,
 			// stop,
 			// setPrefix,
 			setListen,
