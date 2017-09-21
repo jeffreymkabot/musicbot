@@ -1,6 +1,7 @@
 package music
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"log"
@@ -56,18 +57,24 @@ var youtube = &command{
 		if err != nil {
 			return err
 		}
+		defer resp.Body.Close()
+
+		buf := bytes.NewBuffer([]byte{})
+		_, err = buf.ReadFrom(resp.Body)
+		if err != nil {
+			return err
+		}
 
 		payload := &dgv.Payload{
 			ChannelID: voiceChannelID,
-			Reader:    resp.Body,
-		}
-		select {
-		case g.send.Queue <- payload:
-		default:
-			resp.Body.Close()
-			return errors.New("queue is full for this guild")
+			Reader:    buf,
+			Volume:    64,
 		}
 
+		err = g.play.Enqueue(payload)
+		if err != nil {
+			return err
+		}
 		return nil
 	},
 }
@@ -75,12 +82,10 @@ var youtube = &command{
 var skip = &command{
 	name: "skip",
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
-		// buffered channel so don't wait
-		select {
-		case g.send.Control <- dgv.Skip:
-			log.Printf("Sent skip")
-		default:
+		if err := g.play.Skip(); err != nil {
 			log.Printf("control was full when tried to send skip")
+		} else {
+			log.Printf("sent skip")
 		}
 		return nil
 	},
@@ -89,12 +94,10 @@ var skip = &command{
 var pause = &command{
 	name: "pause",
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
-		// buffered channel so don't wait
-		select {
-		case g.send.Control <- dgv.Pause:
-			log.Printf("Sent pause")
-		default:
+		if err := g.play.Pause(); err != nil {
 			log.Printf("control was full when tried to send pause")
+		} else {
+			log.Printf("sent pause")
 		}
 		return nil
 	},

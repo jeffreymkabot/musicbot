@@ -34,8 +34,8 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		b.mu.RLock()
 		gu, ok := b.guilds[g.ID]
 		b.mu.RUnlock()
-		if ok {
-			gu.quit()
+		if ok && gu.play != nil {
+			gu.play.Quit()
 		}
 		gInfo := guildInfo{}
 		err := b.db.View(func(tx *bolt.Tx) error {
@@ -56,12 +56,11 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		if musicChannelID == "" {
 			musicChannelID = g.AfkChannelID
 		}
-		send, quit := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10))
+		player := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10))
 		b.mu.Lock()
 		b.guilds[g.ID] = &guild{
 			guildID:   g.ID,
-			send:      send,
-			quit:      quit,
+			play:      player,
 			guildInfo: gInfo,
 		}
 		b.mu.Unlock()

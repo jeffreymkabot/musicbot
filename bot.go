@@ -22,8 +22,7 @@ type guild struct {
 	mu      sync.RWMutex
 	guildID string
 	state   int
-	send    dgv.Sends
-	quit    func()
+	play    *dgv.Player
 	guildInfo
 }
 
