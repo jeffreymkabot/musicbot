@@ -1,7 +1,7 @@
 package music
 
 import (
-	"bytes"
+	// "bytes"
 	"encoding/json"
 	"errors"
 	"log"
@@ -52,27 +52,32 @@ var youtube = &command{
 		if err != nil {
 			return err
 		}
+		log.Printf("dl url %s", dlUrl)
 
 		resp, err := http.Get(dlUrl.String())
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
+		log.Printf("resp %#v", resp)
+		
+		// defer resp.Body.Close()
 
-		buf := bytes.NewBuffer([]byte{})
-		_, err = buf.ReadFrom(resp.Body)
-		if err != nil {
-			return err
-		}
+		// buf := bytes.NewBuffer([]byte{})
+		// _, err = buf.ReadFrom(resp.Body)
+		// if err != nil {
+		// 	return err
+		// }
 
 		payload := &dgv.Payload{
 			ChannelID: voiceChannelID,
-			Reader:    buf,
+			Reader:    resp.Body,
 			Volume:    64,
+			Name:      info.Title,
 		}
 
 		err = g.play.Enqueue(payload)
 		if err != nil {
+			resp.Body.Close()
 			return err
 		}
 		return nil
