@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"net/http"
 
 	"github.com/boltdb/bolt"
 	dgv "github.com/jeffreymkabot/discordvoice"
@@ -54,33 +53,15 @@ var youtube = &command{
 		}
 		log.Printf("dl url %s", dlUrl)
 
-		resp, err := http.Get(dlUrl.String())
-		if err != nil {
-			return err
-		}
-		log.Printf("resp %#v", resp)
-		
-		// defer resp.Body.Close()
-
-		// buf := bytes.NewBuffer([]byte{})
-		// _, err = buf.ReadFrom(resp.Body)
-		// if err != nil {
-		// 	return err
-		// }
-
 		payload := &dgv.Payload{
 			ChannelID: voiceChannelID,
-			Reader:    resp.Body,
+			URL:       dlUrl.String(),
 			Volume:    64,
 			Name:      info.Title,
+			Duration:  info.Duration,
 		}
 
-		err = g.play.Enqueue(payload)
-		if err != nil {
-			resp.Body.Close()
-			return err
-		}
-		return nil
+		return g.play.Enqueue(payload)
 	},
 }
 
