@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 
 	"github.com/boltdb/bolt"
@@ -100,16 +101,56 @@ func onMessageCreate(b *Bot) func(s *discordgo.Session, m *discordgo.MessageCrea
 			return
 		}
 
-		for _, cmd := range b.commands {
-			if strings.ToLower(args[0]) == cmd.name {
-				err := b.exec(cmd, guild, m.Author.ID, textChannel.ID, args[1:])
-				if err != nil {
-					s.ChannelMessageSend(textChannel.ID, err.Error())
+		var candidate string
+		// if the first argument is a valid url, try its hostname as a command, and it begins the cmd args
+		// if it is not a url, it should be a command name or alias and cmd args are the succeeding strings
+		if strings.HasPrefix(args[0], "http") {
+			if u, err := url.Parse(args[0]); err == nil {
+				candidate = strings.ToLower(domainFrom(u.Hostname()))
+			}
+		}
+		if candidate == "" {
+			candidate = strings.ToLower(args[0])
+			args = args[1:]
+		}
+
+		log.Printf("candidate cmd %v", candidate)
+
+		cmd := commandByName(b, candidate)
+		if cmd == nil {
+			return
+		}
+
+		err = b.exec(cmd, guild, m.Author.ID, textChannel.ID, args)
+		if err != nil {
+			s.ChannelMessageSend(textChannel.ID, err.Error())
+		}
+		return
+	}
+}
+
+// get example in example, example., example.com, www.example.com, www.system.example.com
+func domainFrom(hostname string) string {
+	byDot := strings.Split(hostname, ".")
+	if len(byDot) > 1 {
+		return byDot[len(byDot)-2]
+	}
+	return byDot[0]
+}
+
+func commandByName(b *Bot, candidate string) *command {
+	for _, c := range b.commands {
+		if candidate == c.name {
+			return c
+		} else if len(c.alias) > 0 {
+			for _, a := range c.alias {
+				if candidate == a {
+					return c
 				}
-				return
 			}
 		}
 	}
+	return nil
 }
 
 func guildMusicChannelID(s *discordgo.Session, guildID string) string {

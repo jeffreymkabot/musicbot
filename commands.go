@@ -107,7 +107,7 @@ var soundcloud = &command{
 			return err
 		}
 		defer resp.Body.Close()
-		
+
 		if resp.StatusCode != http.StatusOK {
 			return errors.New(resp.Status)
 		}
@@ -168,7 +168,8 @@ var skip = &command{
 }
 
 var pause = &command{
-	name: "pause",
+	name:  "pause",
+	alias: []string{"p"},
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
 		if err := g.play.Pause(); err != nil {
 			log.Printf("control was full when tried to send pause")
