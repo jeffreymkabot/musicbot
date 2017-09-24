@@ -10,12 +10,6 @@ import (
 	dgv "github.com/jeffreymkabot/discordvoice"
 )
 
-const (
-	Ready = iota
-	Playing
-	Paused
-)
-
 const defaultPrefix = "#!"
 
 type guild struct {
@@ -27,20 +21,33 @@ type guild struct {
 }
 
 type guildInfo struct {
-	Prefix string `json:"prefix"`
+	Prefix         string   `json:"prefix"`
 	ListenChannels []string `json:"listen"`
 }
 
-type Bot struct {
-	mu       sync.RWMutex
-	session  *discordgo.Session
-	db       *bolt.DB
-	owner    string
-	guilds   map[string]*guild
-	commands []*command
+type BotOption func(*Bot)
+
+func Soundcloud(clientID string) BotOption {
+	return func(b *Bot) {
+		if clientID != "" {
+			log.Printf("activate soundcloud")
+			b.soundcloud = clientID
+			b.commands = append(b.commands, soundcloud)
+		}
+	}
 }
 
-func New(token string, dbPath string, owner string) (*Bot, error) {
+type Bot struct {
+	mu         sync.RWMutex
+	session    *discordgo.Session
+	db         *bolt.DB
+	owner      string
+	soundcloud string
+	guilds     map[string]*guild
+	commands   []*command
+}
+
+func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, error) {
 	db, err := bolt.Open(dbPath, 0600, nil)
 	if err != nil {
 		return nil, err
@@ -67,12 +74,18 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 			youtube,
 			skip,
 			pause,
-			// stop,
+			// clear,
 			// setPrefix,
 			setListen,
 			unsetListen,
 		},
 	}
+
+	for _, opt := range opts {
+		opt(b)
+	}
+
+	log.Printf("available commands %#v", b.commands)
 
 	session.AddHandlerOnce(onReady(b))
 

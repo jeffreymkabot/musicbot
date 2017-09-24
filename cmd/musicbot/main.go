@@ -22,13 +22,14 @@ func main() {
 		Token string
 		Bolt  string
 		Owner string
+		Soundcloud string
 	}
 	_, err := toml.DecodeFile(*cfgFile, &cfg)
 	if err != nil {
 		log.Fatalf("Error opening cfg file: %v", err)
 	}
 
-	bot, err := music.New(cfg.Token, cfg.Bolt, cfg.Owner)
+	bot, err := music.New(cfg.Token, cfg.Bolt, cfg.Owner, music.Soundcloud(cfg.Soundcloud))
 	defer bot.Stop()
 	if err != nil {
 		log.Fatalf("%v", err)
