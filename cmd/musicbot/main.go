@@ -19,9 +19,9 @@ func main() {
 	}
 
 	var cfg struct {
-		Token string
-		Bolt  string
-		Owner string
+		Token      string
+		Bolt       string
+		Owner      string
 		Soundcloud string
 	}
 	_, err := toml.DecodeFile(*cfgFile, &cfg)
@@ -30,10 +30,10 @@ func main() {
 	}
 
 	bot, err := music.New(cfg.Token, cfg.Bolt, cfg.Owner, music.Soundcloud(cfg.Soundcloud))
-	defer bot.Stop()
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
+	defer bot.Stop()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, os.Kill)

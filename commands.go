@@ -1,43 +1,40 @@
 package music
 
 import (
-	"time"
-	// "bytes"
 	"encoding/json"
 	"errors"
 	"log"
-	"net/http"
-	"net/url"
 
 	"github.com/boltdb/bolt"
 	dgv "github.com/jeffreymkabot/discordvoice"
-	"github.com/rylio/ytdl"
+	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
 type command struct {
-	name                string
-	alias               []string
-	usage               string
-	short               string
-	long                string
-	isOwnerOnly         bool
-	isListenChannelOnly bool
-	run                 func(*Bot, *guild, string, []string) error
+	name          string
+	alias         []string
+	usage         string
+	short         string
+	long          string
+	ownerOnly     bool
+	listenChannel bool
+	ack           string // must be an emoji, used to react on success
+	run           func(*Bot, *guild, string, []string) error
 }
 
 var help = &command{
-	name: "help",
+	name:  "help",
+	alias: []string{"h"},
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
 		return nil
 	},
 }
 
-// TODO youtube / soundcloud / etc implement a common interface
-
 var youtube = &command{
-	name:                "youtube",
-	alias:               []string{"yt"},
-	isListenChannelOnly: true,
+	name:          "youtube",
+	alias:         []string{"yt", "youtu"},
+	listenChannel: true,
+	ack:           "☑",
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
 		if len(args) == 0 {
 			return errors.New("video please")
@@ -48,39 +45,26 @@ var youtube = &command{
 			return errors.New("no music channel set up")
 		}
 
-		resourceUrl := args[0]
-		info, err := ytdl.GetVideoInfo(resourceUrl)
+		md, err := (&plugins.Youtube{}).DownloadURL(args[0])
 		if err != nil {
 			return err
 		}
 
-		dlUrl, err := info.GetDownloadURL(info.Formats.Extremes(ytdl.FormatAudioEncodingKey, true)[0])
+		status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Volume(64), dgv.Title(md.Title), dgv.Duration(md.Duration))
 		if err != nil {
 			return err
 		}
-		log.Printf("dl url %s", dlUrl)
 
-		payload := &dgv.Payload{
-			ChannelID: voiceChannelID,
-			URL:       dlUrl.String(),
-			Volume:    64,
-			Name:      info.Title,
-			Duration:  info.Duration,
-		}
-
-		return g.play.Enqueue(payload)
+		go b.listen(textChannelID, status)
+		return nil
 	},
 }
 
-// TODO soundcloud this should be split up into smaller functions, probably its own source file
-
-var endpointSc = "http://api.soundcloud.com/"
-var endpointScResolve = endpointSc + "resolve/"
-
 var soundcloud = &command{
-	name:                "soundcloud",
-	alias:               []string{"sc"},
-	isListenChannelOnly: true,
+	name:          "soundcloud",
+	alias:         []string{"sc", "snd"},
+	listenChannel: true,
+	ack:           "☑",
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
 		if len(args) == 0 {
 			return errors.New("track please")
@@ -91,67 +75,18 @@ var soundcloud = &command{
 			return errors.New("no music channel set up")
 		}
 
-		if b.soundcloud == "" {
-			return errors.New("no soundcloud client id set up")
-		}
-
-		resourceUrl := args[0]
-
-		query := url.Values{}
-		query.Add("client_id", b.soundcloud)
-		query.Add("url", resourceUrl)
-
-		resp, err := http.Get(endpointScResolve + "?" + query.Encode())
-		log.Printf("resp %#v", resp)
+		md, err := (&plugins.Soundcloud{ClientID: b.soundcloud}).DownloadURL(args[0])
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			return errors.New(resp.Status)
-		}
-		if resp.ContentLength == 0 {
-			return errors.New("no content")
-		}
-
-		var respJSON struct {
-			Downloadable bool
-			DownloadURL  string `json:"download_url"`
-			Streamable   bool
-			StreamURL    string `json:"stream_url"`
-			Title        string
-			Duration     int
-		}
-		dec := json.NewDecoder(resp.Body)
-		err = dec.Decode(&respJSON)
+		status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Volume(64), dgv.Title(md.Title), dgv.Duration(md.Duration))
 		if err != nil {
 			return err
 		}
-		log.Printf("track info %#v", respJSON)
 
-		dlUrl := ""
-		if respJSON.Downloadable {
-			dlUrl = respJSON.DownloadURL
-		} else if respJSON.Streamable {
-			dlUrl = respJSON.StreamURL
-		}
-		if dlUrl == "" {
-			return errors.New("couldn't get a download url")
-		}
-
-		query = url.Values{}
-		query.Add("client_id", b.soundcloud)
-
-		payload := &dgv.Payload{
-			ChannelID: voiceChannelID,
-			URL:       dlUrl + "?" + query.Encode(),
-			Volume:    64,
-			Name:      respJSON.Title,
-			Duration:  time.Duration(respJSON.Duration) * time.Millisecond,
-		}
-
-		return g.play.Enqueue(payload)
+		go b.listen(textChannelID, status)
+		return nil
 	},
 }
 
@@ -180,10 +115,12 @@ var pause = &command{
 	},
 }
 
-var stop = &command{
-	name: "stop",
+var clear = &command{
+	name:  "clear",
+	alias: []string{"cl"},
+	ack:   "🔘",
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
-		return nil
+		return g.play.Clear()
 	},
 }
 
@@ -203,6 +140,7 @@ var setPrefix = &command{
 
 var setListen = &command{
 	name: "listenhere",
+	ack:  "🆗",
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
 		if textChannelID == "" {
 			return errors.New("channel please")
@@ -224,13 +162,13 @@ var setListen = &command{
 		if err != nil {
 			return err
 		}
-		b.session.ChannelMessageSend(textChannelID, "ok")
 		return nil
 	},
 }
 
 var unsetListen = &command{
 	name: "unlistenhere",
+	ack:  "🆗",
 	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
 		if textChannelID == "" {
 			return errors.New("channel please")
@@ -254,7 +192,6 @@ var unsetListen = &command{
 		if err != nil {
 			return err
 		}
-		b.session.ChannelMessageSend(textChannelID, "ok")
 		return nil
 	},
 }

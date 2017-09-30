@@ -2,8 +2,10 @@ package music
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
@@ -15,7 +17,6 @@ const defaultPrefix = "#!"
 type guild struct {
 	mu      sync.RWMutex
 	guildID string
-	state   int
 	play    *dgv.Player
 	guildInfo
 }
@@ -37,6 +38,7 @@ func Soundcloud(clientID string) BotOption {
 	}
 }
 
+// TODO quit channel that is closed and wait group waited on during bot.Stop() in order to close players and delete messages?
 type Bot struct {
 	mu         sync.RWMutex
 	session    *discordgo.Session
@@ -64,6 +66,7 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 	if err != nil {
 		return nil, err
 	}
+	session.LogLevel = discordgo.LogInformational
 	b := &Bot{
 		session: session,
 		db:      db,
@@ -74,7 +77,7 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 			youtube,
 			skip,
 			pause,
-			// clear,
+			clear,
 			// setPrefix,
 			setListen,
 			unsetListen,
@@ -107,14 +110,14 @@ func (b *Bot) Stop() {
 
 func (b *Bot) exec(cmd *command, g *guild, authorID string, textChannelID string, args []string) error {
 	g.mu.RLock()
-	if cmd.isListenChannelOnly && !contains(g.ListenChannels, textChannelID) {
+	if cmd.listenChannel && !contains(g.ListenChannels, textChannelID) {
 		g.mu.RUnlock()
 		log.Printf("command invoked in unregistered channel")
 		return nil
 	}
 	g.mu.RUnlock()
 
-	if cmd.isOwnerOnly && b.owner != authorID {
+	if cmd.ownerOnly && b.owner != authorID {
 		return errors.New("user not allowed to execute this command")
 	}
 
@@ -129,4 +132,37 @@ func contains(s []string, t string) bool {
 		}
 	}
 	return false
+}
+
+func (b *Bot) listen(textChannelID string, status <-chan dgv.SongStatus) {
+	var msg *discordgo.Message
+	embed := &discordgo.MessageEmbed{}
+	embed.Color = 0xa680ee
+	// embed.Footer = &discordgo.MessageEmbedFooter{}
+	for update := range status {
+		embed.Title = "▶️ " + update.Title
+		if !update.Playing {
+			embed.Title = "⏸️ " + update.Title
+		}
+		embed.Description = niceTime(update.Elapsed) + "/" + niceTime(update.Duration)
+		if msg == nil {
+			// embed.Footer.Text = "Playback started at " + time.Now().String()
+			msg, _ = b.session.ChannelMessageSendEmbed(textChannelID, embed)
+		} else {
+			b.session.ChannelMessageEditEmbed(msg.ChannelID, msg.ID, embed)
+		}
+	}
+	if msg != nil {
+		b.session.ChannelMessageDelete(msg.ChannelID, msg.ID)
+	}
+}
+
+func niceTime(t time.Duration) string {
+	hours := int(t.Hours())
+	min := int(t.Minutes()) % 60
+	sec := int(t.Seconds()) % 60
+	if hours >= 1 {
+		return fmt.Sprintf("%02v:%02v:%02v", hours, min, sec)
+	}
+	return fmt.Sprintf("%02v:%02v", min, sec)
 }

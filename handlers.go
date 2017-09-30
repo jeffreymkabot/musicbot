@@ -25,19 +25,22 @@ func onReady(b *Bot) func(s *discordgo.Session, r *discordgo.Ready) {
 		}
 		s.AddHandler(onGuildCreate(b))
 		s.AddHandler(onMessageCreate(b))
-		s.UpdateStatus(0, fmt.Sprintf("%s youtube; %s skip; %s pause", defaultPrefix, defaultPrefix, defaultPrefix))
+		s.UpdateStatus(0, fmt.Sprintf("%s yt; %s sc; %s skip; %s pause", defaultPrefix, defaultPrefix, defaultPrefix, defaultPrefix))
 	}
 }
 
 func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) {
 	return func(s *discordgo.Session, g *discordgo.GuildCreate) {
 		log.Printf("guild create %#v\n", g.Guild)
+
+		// cleanup existing guild structure if exists
 		b.mu.RLock()
 		gu, ok := b.guilds[g.ID]
 		b.mu.RUnlock()
 		if ok && gu.play != nil {
 			gu.play.Quit()
 		}
+
 		gInfo := guildInfo{}
 		err := b.db.View(func(tx *bolt.Tx) error {
 			bucket := tx.Bucket([]byte("guilds"))
@@ -57,8 +60,8 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		if musicChannelID == "" {
 			musicChannelID = g.AfkChannelID
 		}
-		player := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10), dgv.CanBroadcastStatus(true))
-		s.GuildMemberNickname(g.ID, "@me", "")
+		player := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10))
+		// s.GuildMemberNickname(g.ID, "@me", "")
 		b.mu.Lock()
 		b.guilds[g.ID] = &guild{
 			guildID:   g.ID,
@@ -102,8 +105,8 @@ func onMessageCreate(b *Bot) func(s *discordgo.Session, m *discordgo.MessageCrea
 		}
 
 		var candidate string
-		// if the first argument is a valid url, try its hostname as a command, and it begins the cmd args
-		// if it is not a url, it should be a command name or alias and cmd args are the succeeding strings
+		// if arg[0] is a valid url, try the url hostname as a command name/alias and the whole url as command's arg[0]
+		// if arg[0] is not a url, then arg[0] is the command name/alias and the command's args are arg[1:]
 		if strings.HasPrefix(args[0], "http") {
 			if u, err := url.Parse(args[0]); err == nil {
 				candidate = strings.ToLower(domainFrom(u.Hostname()))
@@ -124,18 +127,23 @@ func onMessageCreate(b *Bot) func(s *discordgo.Session, m *discordgo.MessageCrea
 		err = b.exec(cmd, guild, m.Author.ID, textChannel.ID, args)
 		if err != nil {
 			s.ChannelMessageSend(textChannel.ID, err.Error())
+		} else if cmd.ack != "" {
+			err = s.MessageReactionAdd(textChannel.ID, m.ID, cmd.ack)
+			if err != nil {
+				log.Printf("error react %v", err)
+			}
 		}
 		return
 	}
 }
 
-// get example in example, example., example.com, www.example.com, www.system.example.com
+// get "example" in example, example., example.com, www.example.com, www.system.example.com
 func domainFrom(hostname string) string {
-	byDot := strings.Split(hostname, ".")
-	if len(byDot) > 1 {
-		return byDot[len(byDot)-2]
+	parts := strings.Split(hostname, ".")
+	if len(parts) > 1 {
+		return parts[len(parts)-2]
 	}
-	return byDot[0]
+	return parts[0]
 }
 
 func commandByName(b *Bot, candidate string) *command {
