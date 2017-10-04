@@ -55,7 +55,8 @@ var youtube = &command{
 			return err
 		}
 
-		go b.listen(textChannelID, status)
+		g.wg.Add(1)
+		go b.listen(g, textChannelID, status)
 		return nil
 	},
 }
@@ -85,7 +86,8 @@ var soundcloud = &command{
 			return err
 		}
 
-		go b.listen(textChannelID, status)
+		g.wg.Add(1)
+		go b.listen(g, textChannelID, status)
 		return nil
 	},
 }

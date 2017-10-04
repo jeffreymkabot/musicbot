@@ -34,11 +34,12 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		log.Printf("guild create %#v\n", g.Guild)
 
 		// cleanup existing guild structure if exists
+		// e.g. disconnected, kicked and reinvited
 		b.mu.RLock()
 		gu, ok := b.guilds[g.ID]
 		b.mu.RUnlock()
 		if ok && gu.play != nil {
-			gu.play.Quit()
+			gu.close()
 		}
 
 		gInfo := guildInfo{}
@@ -61,7 +62,6 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 			musicChannelID = g.AfkChannelID
 		}
 		player := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10))
-		// s.GuildMemberNickname(g.ID, "@me", "")
 		b.mu.Lock()
 		b.guilds[g.ID] = &guild{
 			guildID:   g.ID,

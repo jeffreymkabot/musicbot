@@ -15,10 +15,19 @@ import (
 const defaultPrefix = "#!"
 
 type guild struct {
-	mu      sync.RWMutex
 	guildID string
 	play    *dgv.Player
+	wg      sync.WaitGroup
+	// mutex protects guildInfo fields
+	mu      sync.RWMutex
 	guildInfo
+}
+
+func (g *guild) close() {
+	if g.play != nil {
+		g.play.Quit()
+	}
+	g.wg.Wait()
 }
 
 type guildInfo struct {
@@ -38,7 +47,6 @@ func Soundcloud(clientID string) BotOption {
 	}
 }
 
-// TODO quit channel that is closed and wait group waited on during bot.Stop() in order to close players and delete messages?
 type Bot struct {
 	mu         sync.RWMutex
 	session    *discordgo.Session
@@ -103,6 +111,9 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 
 func (b *Bot) Stop() {
 	b.mu.Lock()
+	for _, g := range b.guilds {
+		g.close()
+	}
 	b.session.Close()
 	b.db.Close()
 	b.mu.Unlock()
@@ -134,7 +145,7 @@ func contains(s []string, t string) bool {
 	return false
 }
 
-func (b *Bot) listen(textChannelID string, status <-chan dgv.SongStatus) {
+func (b *Bot) listen(g *guild, textChannelID string, status <-chan dgv.SongStatus) {
 	var msg *discordgo.Message
 	embed := &discordgo.MessageEmbed{}
 	embed.Color = 0xa680ee
@@ -155,6 +166,7 @@ func (b *Bot) listen(textChannelID string, status <-chan dgv.SongStatus) {
 	if msg != nil {
 		b.session.ChannelMessageDelete(msg.ChannelID, msg.ID)
 	}
+	g.wg.Done()
 }
 
 func niceTime(t time.Duration) string {
