@@ -2,3 +2,5 @@ token = ""
 bolt = ""
 owner = ""
 soundcloud = ""
+# loudness should be a float
+loudness = 0.0

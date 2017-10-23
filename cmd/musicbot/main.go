@@ -23,13 +23,16 @@ func main() {
 		Bolt       string
 		Owner      string
 		Soundcloud string
+		Loudness   float64
 	}
 	_, err := toml.DecodeFile(*cfgFile, &cfg)
 	if err != nil {
 		log.Fatalf("Error opening cfg file: %v", err)
 	}
 
-	bot, err := music.New(cfg.Token, cfg.Bolt, cfg.Owner, music.Soundcloud(cfg.Soundcloud))
+	log.Printf("Using config %#v", cfg)
+
+	bot, err := music.New(cfg.Token, cfg.Bolt, cfg.Owner, music.Loudness(cfg.Loudness), music.Soundcloud(cfg.Soundcloud))
 	if err != nil {
 		log.Fatalf("%v", err)
 	}

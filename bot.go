@@ -36,8 +36,10 @@ type guildInfo struct {
 	ListenChannels []string `json:"listen"`
 }
 
+// BotOptions configure runtime parameters of the bot
 type BotOption func(*Bot)
 
+// Soundcloud sets the clientID required by the soundcloud API and enables use of the soundcloud command.
 func Soundcloud(clientID string) BotOption {
 	return func(b *Bot) {
 		if clientID != "" {
@@ -48,12 +50,24 @@ func Soundcloud(clientID string) BotOption {
 	}
 }
 
+// Loudness sets the loudness target.  See https://ffmpeg.org/ffmpeg-filters.html#loudnorm.
+// Values less than -70.0 or greater than -5.0 have no effect.
+// In particular, the default value of 0 has no effect and input streams will be unchanged.
+func Loudness(f float64) BotOption {
+	return func(b *Bot) {
+		if -70 <= f && f <= -5 {
+			b.loudness = f
+		}
+	}
+}
+
 type Bot struct {
 	mu         sync.RWMutex
 	session    *discordgo.Session
 	db         *bolt.DB
 	owner      string
 	soundcloud string
+	loudness   float64
 	guilds     map[string]*guild
 	commands   []*command
 }
@@ -133,7 +147,7 @@ func (b *Bot) Enqueue(g *guild, plugin plugins.Plugin, url string, statusChannel
 		return err
 	}
 
-	status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Limiter(-22), dgv.Title(md.Title), dgv.Duration(md.Duration))
+	status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Limiter(b.loudness), dgv.Title(md.Title), dgv.Duration(md.Duration))
 	if err != nil {
 		return err
 	}
