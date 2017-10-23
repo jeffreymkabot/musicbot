@@ -73,7 +73,7 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 	if err != nil {
 		return nil, err
 	}
-	session.LogLevel = discordgo.LogInformational
+	session.LogLevel = discordgo.LogWarning
 	b := &Bot{
 		session: session,
 		db:      db,
@@ -97,7 +97,9 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 
 	log.Printf("available commands %#v", b.commands)
 
-	session.AddHandlerOnce(onReady(b))
+	session.AddHandler(onGuildCreate(b))
+	session.AddHandler(onMessageCreate(b))
+	session.AddHandler(onReady(b))
 
 	err = session.Open()
 	if err != nil {

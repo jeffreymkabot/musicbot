@@ -14,29 +14,27 @@ import (
 
 const musicChannelPrefix = "music"
 
-func onReady(b *Bot) func(s *discordgo.Session, r *discordgo.Ready) {
-	return func(s *discordgo.Session, r *discordgo.Ready) {
-		log.Printf("ready %#v\n", r)
-		for _, g := range r.Guilds {
+func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
+	return func(session *discordgo.Session, ready *discordgo.Ready) {
+		log.Printf("ready %#v\n", ready)
+		for _, g := range ready.Guilds {
 			if !g.Unavailable {
 				gc := &discordgo.GuildCreate{Guild: g}
-				onGuildCreate(b)(s, gc)
+				onGuildCreate(b)(session, gc)
 			}
 		}
-		s.AddHandler(onGuildCreate(b))
-		s.AddHandler(onMessageCreate(b))
-		s.UpdateStatus(0, fmt.Sprintf("%s yt; %s sc; %s skip; %s pause", defaultPrefix, defaultPrefix, defaultPrefix, defaultPrefix))
+		session.UpdateStatus(0, fmt.Sprintf("%s yt; %s sc; %s skip; %s pause", defaultPrefix, defaultPrefix, defaultPrefix, defaultPrefix))
 	}
 }
 
-func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) {
-	return func(s *discordgo.Session, g *discordgo.GuildCreate) {
-		log.Printf("guild create %#v\n", g.Guild)
+func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
+	return func(session *discordgo.Session, gc *discordgo.GuildCreate) {
+		log.Printf("guild create %#v\n", gc.Guild)
 
 		// cleanup existing guild structure if exists
 		// e.g. disconnected, kicked and reinvited
 		b.mu.RLock()
-		gu, ok := b.guilds[g.ID]
+		gu, ok := b.guilds[gc.ID]
 		b.mu.RUnlock()
 		if ok && gu.play != nil {
 			gu.close()
@@ -45,7 +43,7 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		gInfo := guildInfo{}
 		err := b.db.View(func(tx *bolt.Tx) error {
 			bucket := tx.Bucket([]byte("guilds"))
-			val := bucket.Get([]byte(g.ID))
+			val := bucket.Get([]byte(gc.ID))
 			if val == nil {
 				return nil
 			}
@@ -56,15 +54,15 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 		}
 		log.Printf("found existing guildinfo %#v", gInfo)
 
-		musicChannelID := guildMusicChannelID(s, g.ID)
-		log.Printf("music channel in %v: %v", g.ID, musicChannelID)
+		musicChannelID := guildMusicChannelID(session, gc.ID)
+		log.Printf("music channel in %v: %v", gc.ID, musicChannelID)
 		if musicChannelID == "" {
-			musicChannelID = g.AfkChannelID
+			musicChannelID = gc.AfkChannelID
 		}
-		player := dgv.Connect(s, g.ID, musicChannelID, dgv.QueueLength(10))
+		player := dgv.Connect(session, gc.ID, musicChannelID, dgv.QueueLength(10))
 		b.mu.Lock()
-		b.guilds[g.ID] = &guild{
-			guildID:   g.ID,
+		b.guilds[gc.ID] = &guild{
+			guildID:   gc.ID,
 			play:      player,
 			guildInfo: gInfo,
 		}
@@ -72,10 +70,10 @@ func onGuildCreate(b *Bot) func(s *discordgo.Session, g *discordgo.GuildCreate) 
 	}
 }
 
-func onMessageCreate(b *Bot) func(s *discordgo.Session, m *discordgo.MessageCreate) {
-	return func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		log.Printf("message %#v\n", m.Message)
-		textChannel, err := s.State.Channel(m.ChannelID)
+func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) {
+	return func(session *discordgo.Session, mc *discordgo.MessageCreate) {
+		log.Printf("message %#v\n", mc.Message)
+		textChannel, err := session.State.Channel(mc.ChannelID)
 		if err != nil {
 			return
 		}
@@ -95,11 +93,11 @@ func onMessageCreate(b *Bot) func(s *discordgo.Session, m *discordgo.MessageCrea
 			prefix = guild.Prefix
 		}
 
-		if !strings.HasPrefix(m.Content, prefix) {
+		if !strings.HasPrefix(mc.Content, prefix) {
 			return
 		}
 
-		args := strings.Fields(strings.TrimPrefix(m.Content, prefix))
+		args := strings.Fields(strings.TrimPrefix(mc.Content, prefix))
 		if len(args) == 0 {
 			return
 		}
@@ -125,7 +123,7 @@ func onMessageCreate(b *Bot) func(s *discordgo.Session, m *discordgo.MessageCrea
 		}
 
 		log.Printf("exec command %v in %v with %v\n", cmd.name, guild.guildID, args)
-		b.exec(cmd, guild, m.Author.ID, m.ID, textChannel.ID, args)
+		b.exec(cmd, guild, mc.Author.ID, mc.ID, textChannel.ID, args)
 	}
 }
 
