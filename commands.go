@@ -50,7 +50,7 @@ var youtube = &command{
 			return err
 		}
 
-		status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Volume(64), dgv.Title(md.Title), dgv.Duration(md.Duration))
+		status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Limiter(-22), dgv.Title(md.Title), dgv.Duration(md.Duration))
 		if err != nil {
 			return err
 		}
@@ -81,7 +81,7 @@ var soundcloud = &command{
 			return err
 		}
 
-		status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Volume(64), dgv.Title(md.Title), dgv.Duration(md.Duration))
+		status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Limiter(-22), dgv.Title(md.Title), dgv.Duration(md.Duration))
 		if err != nil {
 			return err
 		}
