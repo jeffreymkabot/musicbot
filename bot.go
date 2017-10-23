@@ -1,7 +1,6 @@
 package music
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -19,7 +18,7 @@ type guild struct {
 	play    *dgv.Player
 	wg      sync.WaitGroup
 	// mutex protects guildInfo fields
-	mu      sync.RWMutex
+	mu sync.RWMutex
 	guildInfo
 }
 
@@ -119,21 +118,27 @@ func (b *Bot) Stop() {
 	b.mu.Unlock()
 }
 
-func (b *Bot) exec(cmd *command, g *guild, authorID string, textChannelID string, args []string) error {
+func (b *Bot) exec(cmd *command, g *guild, authorID string, messageID string, textChannelID string, args []string) {
 	g.mu.RLock()
 	if cmd.listenChannel && !contains(g.ListenChannels, textChannelID) {
 		g.mu.RUnlock()
-		log.Printf("command invoked in unregistered channel")
-		return nil
+		log.Printf("command %s invoked in unregistered channel", cmd.name)
+		return
 	}
 	g.mu.RUnlock()
 
 	if cmd.ownerOnly && b.owner != authorID {
-		return errors.New("user not allowed to execute this command")
+		log.Printf("user %s not allowed to execute this command", authorID)
+		return
 	}
 
 	log.Printf("exec command %v in %v with %v\n", cmd.name, g.guildID, args)
-	return cmd.run(b, g, textChannelID, args)
+	err := cmd.run(b, g, textChannelID, args)
+	if err != nil {
+		b.session.ChannelMessageSend(textChannelID, fmt.Sprintf("🤔...\n%v", err))
+	} else if cmd.ack != "" {
+		b.session.MessageReactionAdd(textChannelID, messageID, cmd.ack)
+	}
 }
 
 func contains(s []string, t string) bool {
@@ -155,7 +160,7 @@ func (b *Bot) listen(g *guild, textChannelID string, status <-chan dgv.SongStatu
 		if !update.Playing {
 			embed.Title = "⏸️ " + update.Title
 		}
-		embed.Description = niceTime(update.Elapsed) + "/" + niceTime(update.Duration)
+		embed.Description = prettyTime(update.Elapsed) + "/" + prettyTime(update.Duration)
 		if msg == nil {
 			// embed.Footer.Text = "Playback started at " + time.Now().String()
 			msg, _ = b.session.ChannelMessageSendEmbed(textChannelID, embed)
@@ -169,7 +174,7 @@ func (b *Bot) listen(g *guild, textChannelID string, status <-chan dgv.SongStatu
 	g.wg.Done()
 }
 
-func niceTime(t time.Duration) string {
+func prettyTime(t time.Duration) string {
 	hours := int(t.Hours())
 	min := int(t.Minutes()) % 60
 	sec := int(t.Seconds()) % 60

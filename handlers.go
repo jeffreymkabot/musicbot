@@ -124,16 +124,8 @@ func onMessageCreate(b *Bot) func(s *discordgo.Session, m *discordgo.MessageCrea
 			return
 		}
 
-		err = b.exec(cmd, guild, m.Author.ID, textChannel.ID, args)
-		if err != nil {
-			s.ChannelMessageSend(textChannel.ID, err.Error())
-		} else if cmd.ack != "" {
-			err = s.MessageReactionAdd(textChannel.ID, m.ID, cmd.ack)
-			if err != nil {
-				log.Printf("error react %v", err)
-			}
-		}
-		return
+		log.Printf("exec command %v in %v with %v\n", cmd.name, guild.guildID, args)
+		b.exec(cmd, guild, m.Author.ID, m.ID, textChannel.ID, args)
 	}
 }
 
