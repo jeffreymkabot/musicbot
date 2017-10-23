@@ -1,6 +1,7 @@
 package music
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
 	dgv "github.com/jeffreymkabot/discordvoice"
+	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
 const defaultPrefix = "#!"
@@ -118,6 +120,27 @@ func (b *Bot) Stop() {
 	b.session.Close()
 	b.db.Close()
 	b.mu.Unlock()
+}
+
+func (b *Bot) Enqueue(g *guild, plugin plugins.Plugin, url string, statusChannelID string) error {
+	voiceChannelID := guildMusicChannelID(b.session, g.guildID)
+	if voiceChannelID == "" {
+		return errors.New("no music channel set up")
+	}
+
+	md, err := plugin.DownloadURL(url)
+	if err != nil {
+		return err
+	}
+
+	status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Limiter(-22), dgv.Title(md.Title), dgv.Duration(md.Duration))
+	if err != nil {
+		return err
+	}
+
+	g.wg.Add(1)
+	go b.listen(g, statusChannelID, status)
+	return nil
 }
 
 func (b *Bot) exec(cmd *command, g *guild, authorID string, messageID string, textChannelID string, args []string) {

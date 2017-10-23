@@ -6,7 +6,6 @@ import (
 	"log"
 
 	"github.com/boltdb/bolt"
-	dgv "github.com/jeffreymkabot/discordvoice"
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
@@ -40,24 +39,7 @@ var youtube = &command{
 			return errors.New("video please")
 		}
 
-		voiceChannelID := guildMusicChannelID(b.session, g.guildID)
-		if voiceChannelID == "" {
-			return errors.New("no music channel set up")
-		}
-
-		md, err := (&plugins.Youtube{}).DownloadURL(args[0])
-		if err != nil {
-			return err
-		}
-
-		status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Limiter(-22), dgv.Title(md.Title), dgv.Duration(md.Duration))
-		if err != nil {
-			return err
-		}
-
-		g.wg.Add(1)
-		go b.listen(g, textChannelID, status)
-		return nil
+		return b.Enqueue(g, &plugins.Youtube{}, args[0], textChannelID)
 	},
 }
 
@@ -71,24 +53,7 @@ var soundcloud = &command{
 			return errors.New("track please")
 		}
 
-		voiceChannelID := guildMusicChannelID(b.session, g.guildID)
-		if voiceChannelID == "" {
-			return errors.New("no music channel set up")
-		}
-
-		md, err := (&plugins.Soundcloud{ClientID: b.soundcloud}).DownloadURL(args[0])
-		if err != nil {
-			return err
-		}
-
-		status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Limiter(-22), dgv.Title(md.Title), dgv.Duration(md.Duration))
-		if err != nil {
-			return err
-		}
-
-		g.wg.Add(1)
-		go b.listen(g, textChannelID, status)
-		return nil
+		return b.Enqueue(g, &plugins.Soundcloud{ClientID: b.soundcloud}, args[0], textChannelID)
 	},
 }
 
