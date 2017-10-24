@@ -50,7 +50,8 @@ func Soundcloud(clientID string) BotOption {
 	}
 }
 
-// Loudness sets the loudness target.  See https://ffmpeg.org/ffmpeg-filters.html#loudnorm.
+// Loudness sets the loudness target.  Higher is louder.
+// See https://ffmpeg.org/ffmpeg-filters.html#loudnorm.
 // Values less than -70.0 or greater than -5.0 have no effect.
 // In particular, the default value of 0 has no effect and input streams will be unchanged.
 func Loudness(f float64) BotOption {
@@ -147,14 +148,49 @@ func (b *Bot) Enqueue(g *guild, plugin plugins.Plugin, url string, statusChannel
 		return err
 	}
 
-	status, err := g.play.Enqueue(voiceChannelID, md.DownloadURL, dgv.Limiter(b.loudness), dgv.Title(md.Title), dgv.Duration(md.Duration))
-	if err != nil {
-		return err
+	var msg *discordgo.Message
+	embed := &discordgo.MessageEmbed{}
+	embed.Color = 0xa680ee
+	update := func() {
+		if msg == nil {
+			msg, _ = b.session.ChannelMessageSendEmbed(statusChannelID, embed)
+		} else {
+			b.session.ChannelMessageEditEmbed(msg.ChannelID, msg.ID, embed)
+		}
 	}
-
-	g.wg.Add(1)
-	go b.listen(g, statusChannelID, status)
-	return nil
+	
+	return g.play.Enqueue(
+		voiceChannelID,
+		md.DownloadURL,
+		dgv.Title(md.Title),
+		dgv.Duration(md.Duration),
+		dgv.Loudness(b.loudness),
+		dgv.OnStart(func() {
+			embed.Title = "▶️ " + md.Title
+			embed.Description = prettyTime(0) + "/" + prettyTime(md.Duration)
+			update()
+		}),
+		dgv.OnPause(func(elapsed time.Duration) {
+			embed.Title = "⏸️ " + md.Title
+			embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
+			update()
+		}),
+		dgv.OnResume(func(elapsed time.Duration) {
+			embed.Title = "▶️ " + md.Title
+			embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
+			update()
+		}),
+		dgv.OnProgress(func(elapsed time.Duration) {
+			embed.Title = "▶️ " + md.Title
+			embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
+			update()
+		}, 5 * time.Second),
+		dgv.OnEnd(func() {
+			if msg != nil {
+				b.session.ChannelMessageDelete(msg.ChannelID, msg.ID)
+			}
+		}),
+	)
 }
 
 func (b *Bot) exec(cmd *command, g *guild, authorID string, messageID string, textChannelID string, args []string) {
@@ -187,30 +223,6 @@ func contains(s []string, t string) bool {
 		}
 	}
 	return false
-}
-
-func (b *Bot) listen(g *guild, textChannelID string, status <-chan dgv.SongStatus) {
-	var msg *discordgo.Message
-	embed := &discordgo.MessageEmbed{}
-	embed.Color = 0xa680ee
-	// embed.Footer = &discordgo.MessageEmbedFooter{}
-	for update := range status {
-		embed.Title = "▶️ " + update.Title
-		if !update.Playing {
-			embed.Title = "⏸️ " + update.Title
-		}
-		embed.Description = prettyTime(update.Elapsed) + "/" + prettyTime(update.Duration)
-		if msg == nil {
-			// embed.Footer.Text = "Playback started at " + time.Now().String()
-			msg, _ = b.session.ChannelMessageSendEmbed(textChannelID, embed)
-		} else {
-			b.session.ChannelMessageEditEmbed(msg.ChannelID, msg.ID, embed)
-		}
-	}
-	if msg != nil {
-		b.session.ChannelMessageDelete(msg.ChannelID, msg.ID)
-	}
-	g.wg.Done()
 }
 
 func prettyTime(t time.Duration) string {
