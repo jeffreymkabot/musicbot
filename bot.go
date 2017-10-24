@@ -158,7 +158,7 @@ func (b *Bot) Enqueue(g *guild, plugin plugins.Plugin, url string, statusChannel
 			b.session.ChannelMessageEditEmbed(msg.ChannelID, msg.ID, embed)
 		}
 	}
-	
+
 	return g.play.Enqueue(
 		voiceChannelID,
 		md.DownloadURL,
@@ -184,8 +184,10 @@ func (b *Bot) Enqueue(g *guild, plugin plugins.Plugin, url string, statusChannel
 			embed.Title = "▶️ " + md.Title
 			embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
 			update()
-		}, 5 * time.Second),
-		dgv.OnEnd(func() {
+		}, 5*time.Second),
+		dgv.OnEnd(func(elapsed time.Duration, err error) {
+			log.Printf("read %v of %v, expected %v", elapsed, md.Title, md.Duration)
+			log.Printf("reason: %v", err)
 			if msg != nil {
 				b.session.ChannelMessageDelete(msg.ChannelID, msg.ID)
 			}
@@ -197,17 +199,17 @@ func (b *Bot) exec(cmd *command, g *guild, authorID string, messageID string, te
 	g.mu.RLock()
 	if cmd.listenChannel && !contains(g.ListenChannels, textChannelID) {
 		g.mu.RUnlock()
-		log.Printf("command %s invoked in unregistered channel", cmd.name)
+		log.Printf("command %s invoked in unregistered channel %s", cmd.name, textChannelID)
 		return
 	}
 	g.mu.RUnlock()
 
 	if cmd.ownerOnly && b.owner != authorID {
-		log.Printf("user %s not allowed to execute this command", authorID)
+		log.Printf("user %s not allowed to execute command %s", authorID, cmd.name)
 		return
 	}
 
-	log.Printf("exec command %v in %v with %v\n", cmd.name, g.guildID, args)
+	log.Printf("exec command %v in %v with %v", cmd.name, g.guildID, args)
 	err := cmd.run(b, g, textChannelID, args)
 	if err != nil {
 		b.session.ChannelMessageSend(textChannelID, fmt.Sprintf("🤔...\n%v", err))

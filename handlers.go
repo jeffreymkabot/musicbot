@@ -122,7 +122,6 @@ func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) 
 			return
 		}
 
-		log.Printf("exec command %v in %v with %v\n", cmd.name, guild.guildID, args)
 		b.exec(cmd, guild, mc.Author.ID, mc.ID, textChannel.ID, args)
 	}
 }
