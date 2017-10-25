@@ -24,8 +24,21 @@ type command struct {
 var help = &command{
 	name:  "help",
 	alias: []string{"h"},
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
 		return nil
+	},
+}
+
+var reconnect = &command{
+	name:          "reconnect",
+	listenChannel: true,
+	ack:           "🆗",
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
+		g, err := b.session.State.Guild(gu.guildID)
+		if err == nil {
+			b.addGuild(g)
+		}
+		return err
 	},
 }
 
@@ -34,12 +47,11 @@ var youtube = &command{
 	alias:         []string{"yt", "youtu"},
 	listenChannel: true,
 	ack:           "☑",
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
 		if len(args) == 0 {
 			return errors.New("video please")
 		}
-
-		return b.Enqueue(g, &plugins.Youtube{}, args[0], textChannelID)
+		return b.enqueue(gu, &plugins.Youtube{}, args[0], textChannelID)
 	},
 }
 
@@ -48,22 +60,19 @@ var soundcloud = &command{
 	alias:         []string{"sc", "snd"},
 	listenChannel: true,
 	ack:           "☑",
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
 		if len(args) == 0 {
 			return errors.New("track please")
 		}
-
-		return b.Enqueue(g, &plugins.Soundcloud{ClientID: b.soundcloud}, args[0], textChannelID)
+		return b.enqueue(gu, &plugins.Soundcloud{ClientID: b.soundcloud}, args[0], textChannelID)
 	},
 }
 
 var skip = &command{
 	name: "skip",
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
-		if err := g.play.Skip(); err != nil {
-			log.Printf("control was full when tried to send skip")
-		} else {
-			log.Printf("sent skip")
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
+		if err := gu.play.Skip(); err != nil {
+			log.Print("nop skip")
 		}
 		return nil
 	},
@@ -72,11 +81,9 @@ var skip = &command{
 var pause = &command{
 	name:  "pause",
 	alias: []string{"p"},
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
-		if err := g.play.Pause(); err != nil {
-			log.Printf("control was full when tried to send pause")
-		} else {
-			log.Printf("sent pause")
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
+		if err := gu.play.Pause(); err != nil {
+			log.Print("nop pause")
 		}
 		return nil
 	},
@@ -86,20 +93,20 @@ var clear = &command{
 	name:  "clear",
 	alias: []string{"cl"},
 	ack:   "🔘",
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
-		return g.play.Clear()
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
+		return gu.play.Clear()
 	},
 }
 
 var setPrefix = &command{
 	name: "prefix",
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
 		if len(args) == 0 || args[0] == "" {
 			return errors.New("prefix please")
 		}
-		g.mu.Lock()
-		g.Prefix = args[0]
-		g.mu.Unlock()
+		gu.mu.Lock()
+		gu.Prefix = args[0]
+		gu.mu.Unlock()
 		// db
 		return nil
 	},
@@ -108,57 +115,49 @@ var setPrefix = &command{
 var setListen = &command{
 	name: "listenhere",
 	ack:  "🆗",
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
 		if textChannelID == "" {
 			return errors.New("channel please")
 		}
-		g.mu.Lock()
-		if !contains(g.ListenChannels, textChannelID) {
-			g.ListenChannels = append(g.ListenChannels, textChannelID)
+		gu.mu.Lock()
+		if !contains(gu.ListenChannels, textChannelID) {
+			gu.ListenChannels = append(gu.ListenChannels, textChannelID)
 		}
-		g.mu.Unlock()
+		gu.mu.Unlock()
 		// db
-		err := b.db.Update(func(tx *bolt.Tx) error {
+		return b.db.Update(func(tx *bolt.Tx) error {
 			bucket := tx.Bucket([]byte("guilds"))
-			val, err := json.Marshal(g.guildInfo)
+			val, err := json.Marshal(gu.guildInfo)
 			if err != nil {
 				return err
 			}
-			return bucket.Put([]byte(g.guildID), val)
+			return bucket.Put([]byte(gu.guildID), val)
 		})
-		if err != nil {
-			return err
-		}
-		return nil
 	},
 }
 
 var unsetListen = &command{
 	name: "unlistenhere",
 	ack:  "🆗",
-	run: func(b *Bot, g *guild, textChannelID string, args []string) error {
+	run: func(b *Bot, gu *guild, textChannelID string, args []string) error {
 		if textChannelID == "" {
 			return errors.New("channel please")
 		}
-		g.mu.Lock()
-		for i, ch := range g.ListenChannels {
+		gu.mu.Lock()
+		for i, ch := range gu.ListenChannels {
 			if ch == textChannelID {
-				g.ListenChannels = append(g.ListenChannels[:i], g.ListenChannels[i+1:]...)
+				gu.ListenChannels = append(gu.ListenChannels[:i], gu.ListenChannels[i+1:]...)
 			}
 		}
-		g.mu.Unlock()
+		gu.mu.Unlock()
 		// db
-		err := b.db.Update(func(tx *bolt.Tx) error {
+		return b.db.Update(func(tx *bolt.Tx) error {
 			bucket := tx.Bucket([]byte("guilds"))
-			val, err := json.Marshal(g.guildInfo)
+			val, err := json.Marshal(gu.guildInfo)
 			if err != nil {
 				return err
 			}
-			return bucket.Put([]byte(g.guildID), val)
+			return bucket.Put([]byte(gu.guildID), val)
 		})
-		if err != nil {
-			return err
-		}
-		return nil
 	},
 }

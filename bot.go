@@ -1,9 +1,11 @@
 package music
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 )
 
 const defaultPrefix = "#!"
+const musicChannelPrefix = "music"
 
 type guild struct {
 	guildID string
@@ -24,11 +27,12 @@ type guild struct {
 	guildInfo
 }
 
-func (g *guild) close() {
-	if g.play != nil {
-		g.play.Quit()
+func (gu *guild) close() {
+	if gu.play != nil {
+		gu.play.Quit()
 	}
-	g.wg.Wait()
+	// wait for status messages to be deleted
+	gu.wg.Wait()
 }
 
 type guildInfo struct {
@@ -43,7 +47,6 @@ type BotOption func(*Bot)
 func Soundcloud(clientID string) BotOption {
 	return func(b *Bot) {
 		if clientID != "" {
-			log.Printf("activate soundcloud")
 			b.soundcloud = clientID
 			b.commands = append(b.commands, soundcloud)
 		}
@@ -98,6 +101,7 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 		guilds:  make(map[string]*guild),
 		commands: []*command{
 			// help,
+			reconnect,
 			youtube,
 			skip,
 			pause,
@@ -129,17 +133,28 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 
 func (b *Bot) Stop() {
 	b.mu.Lock()
-	for _, g := range b.guilds {
-		g.close()
+	for _, gu := range b.guilds {
+		gu.close()
 	}
 	b.session.Close()
 	b.db.Close()
 	b.mu.Unlock()
 }
 
-func (b *Bot) Enqueue(g *guild, plugin plugins.Plugin, url string, statusChannelID string) error {
-	voiceChannelID := guildMusicChannelID(b.session, g.guildID)
-	if voiceChannelID == "" {
+func (b *Bot) Enqueue(guildID string, plugin plugins.Plugin, url string, statusChannelID string) error {
+	b.mu.RLock()
+	gu, ok := b.guilds[guildID]
+	b.mu.RUnlock()
+	if !ok || gu.play == nil {
+		return errors.New("no player for guild id " + guildID)
+	}
+
+	return b.enqueue(gu, plugin, url, statusChannelID)
+}
+
+func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChannelID string) error {
+	musicChannelID := musicChannelFromGuildID(b.session.State, gu.guildID)
+	if musicChannelID == "" {
 		return errors.New("no music channel set up")
 	}
 
@@ -153,14 +168,18 @@ func (b *Bot) Enqueue(g *guild, plugin plugins.Plugin, url string, statusChannel
 	embed.Color = 0xa680ee
 	update := func() {
 		if msg == nil {
-			msg, _ = b.session.ChannelMessageSendEmbed(statusChannelID, embed)
+			msg, err = b.session.ChannelMessageSendEmbed(statusChannelID, embed)
+			if msg != nil {
+				// gu.close() will now wait until the message is deleted
+				gu.wg.Add(1)
+			}
 		} else {
 			b.session.ChannelMessageEditEmbed(msg.ChannelID, msg.ID, embed)
 		}
 	}
 
-	return g.play.Enqueue(
-		voiceChannelID,
+	return gu.play.Enqueue(
+		musicChannelID,
 		md.DownloadURL,
 		dgv.Title(md.Title),
 		dgv.Duration(md.Duration),
@@ -190,32 +209,92 @@ func (b *Bot) Enqueue(g *guild, plugin plugins.Plugin, url string, statusChannel
 			log.Printf("reason: %v", err)
 			if msg != nil {
 				b.session.ChannelMessageDelete(msg.ChannelID, msg.ID)
+				gu.wg.Done()
 			}
 		}),
 	)
 }
 
-func (b *Bot) exec(cmd *command, g *guild, authorID string, messageID string, textChannelID string, args []string) {
-	g.mu.RLock()
-	if cmd.listenChannel && !contains(g.ListenChannels, textChannelID) {
-		g.mu.RUnlock()
+func (b *Bot) addGuild(g *discordgo.Guild) {
+	// cleanup existing guild structure if exists
+	b.mu.RLock()
+	gu, ok := b.guilds[g.ID]
+	b.mu.RUnlock()
+	if ok {
+		gu.close()
+		// sometimes reconnecting does not produce a viable voice connection
+		// waiting a few seconds seems to help
+		// TODO figure out why and handle this in better way
+		time.Sleep(3 * time.Second)
+	}
+
+	guInfo := guildInfo{}
+	if err := b.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("guilds"))
+		val := bucket.Get([]byte(g.ID))
+		if val == nil {
+			return nil
+		}
+		return json.Unmarshal(val, &guInfo)
+	}); err != nil {
+		log.Printf("error lookup guild in db %v", err)
+	} else {
+		log.Printf("using guildinfo %#v", guInfo)
+	}
+
+	// prefer to idle in the music channel if one exists at this time
+	musicChannel := musicChannelFromGuild(g)
+	if musicChannel == "" {
+		musicChannel = g.AfkChannelID
+	}
+	player := dgv.Connect(b.session, g.ID, musicChannel, dgv.QueueLength(10))
+	b.mu.Lock()
+	b.guilds[g.ID] = &guild{
+		guildID:   g.ID,
+		play:      player,
+		guildInfo: guInfo,
+	}
+	b.mu.Unlock()
+}
+
+func (b *Bot) exec(cmd *command, gu *guild, authorID string, messageID string, textChannelID string, args []string) {
+	gu.mu.RLock()
+	if cmd.listenChannel && !contains(gu.ListenChannels, textChannelID) {
+		gu.mu.RUnlock()
 		log.Printf("command %s invoked in unregistered channel %s", cmd.name, textChannelID)
 		return
 	}
-	g.mu.RUnlock()
+	gu.mu.RUnlock()
 
 	if cmd.ownerOnly && b.owner != authorID {
 		log.Printf("user %s not allowed to execute command %s", authorID, cmd.name)
 		return
 	}
 
-	log.Printf("exec command %v in %v with %v", cmd.name, g.guildID, args)
-	err := cmd.run(b, g, textChannelID, args)
+	log.Printf("exec command %v in %v with %v", cmd.name, gu.guildID, args)
+	err := cmd.run(b, gu, textChannelID, args)
 	if err != nil {
 		b.session.ChannelMessageSend(textChannelID, fmt.Sprintf("🤔...\n%v", err))
 	} else if cmd.ack != "" {
 		b.session.MessageReactionAdd(textChannelID, messageID, cmd.ack)
 	}
+}
+
+func musicChannelFromGuildID(state *discordgo.State, guildID string) string {
+	g, err := state.Guild(guildID)
+	if err != nil {
+		return ""
+	}
+	return musicChannelFromGuild(g)
+}
+
+func musicChannelFromGuild(g *discordgo.Guild) string {
+	for _, ch := range g.Channels {
+		if ch.Type == discordgo.ChannelTypeGuildVoice && strings.HasPrefix(strings.ToLower(ch.Name), musicChannelPrefix) {
+			return ch.ID
+		}
+	}
+	return ""
 }
 
 func contains(s []string, t string) bool {
