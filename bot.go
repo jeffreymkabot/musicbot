@@ -100,12 +100,12 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 		owner:   owner,
 		guilds:  make(map[string]*guild),
 		commands: []*command{
-			// help,
-			reconnect,
+			help,
 			youtube,
 			skip,
 			pause,
 			clear,
+			reconnect,
 			// setPrefix,
 			setListen,
 			unsetListen,
@@ -257,26 +257,30 @@ func (b *Bot) addGuild(g *discordgo.Guild) {
 	b.mu.Unlock()
 }
 
-func (b *Bot) exec(cmd *command, gu *guild, authorID string, messageID string, textChannelID string, args []string) {
+func (b *Bot) exec(cmd *command, env *environment, gu *guild, args []string) {
+	if gu == nil {
+		return
+	}
+
 	gu.mu.RLock()
-	if cmd.listenChannel && !contains(gu.ListenChannels, textChannelID) {
+	if cmd.restrictChannel && !contains(gu.ListenChannels, env.channel.ID) {
 		gu.mu.RUnlock()
-		log.Printf("command %s invoked in unregistered channel %s", cmd.name, textChannelID)
+		log.Printf("command %s invoked in unregistered channel %s", cmd.name, env.channel.ID)
 		return
 	}
 	gu.mu.RUnlock()
 
-	if cmd.ownerOnly && b.owner != authorID {
-		log.Printf("user %s not allowed to execute command %s", authorID, cmd.name)
+	if cmd.ownerOnly && b.owner != env.message.Author.ID {
+		log.Printf("user %s not allowed to execute command %s", env.message.Author.ID, cmd.name)
 		return
 	}
 
 	log.Printf("exec command %v in %v with %v", cmd.name, gu.guildID, args)
-	err := cmd.run(b, gu, textChannelID, args)
+	err := cmd.run(b, env, gu, args)
 	if err != nil {
-		b.session.ChannelMessageSend(textChannelID, fmt.Sprintf("🤔...\n%v", err))
+		b.session.ChannelMessageSend(env.channel.ID, fmt.Sprintf("🤔...\n%v", err))
 	} else if cmd.ack != "" {
-		b.session.MessageReactionAdd(textChannelID, messageID, cmd.ack)
+		b.session.MessageReactionAdd(env.channel.ID, env.message.ID, cmd.ack)
 	}
 }
 
