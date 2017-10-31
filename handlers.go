@@ -18,7 +18,7 @@ func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
 				onGuildCreate(b)(session, gc)
 			}
 		}
-		session.UpdateStatus(0, fmt.Sprintf("%s yt; %s sc; %s skip; %s pause", defaultPrefix, defaultPrefix, defaultPrefix, defaultPrefix))
+		session.UpdateStatus(0, fmt.Sprintf("%s help", defaultPrefix))
 	}
 }
 
