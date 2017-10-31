@@ -166,7 +166,19 @@ func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChanne
 	var msg *discordgo.Message
 	embed := &discordgo.MessageEmbed{}
 	embed.Color = 0xa680ee
-	update := func() {
+	embed.Footer = &discordgo.MessageEmbedFooter{}
+	updateEmbed := func(isPaused bool, elapsed time.Duration, next string) {
+		if isPaused {
+			embed.Title = "⏸️ " + md.Title
+		} else {
+			embed.Title = "▶️ " + md.Title
+		}
+		embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
+		if next != "" {
+			embed.Footer.Text = "On Deck: " + next
+		}
+	}
+	updateMessage := func() {
 		if msg == nil {
 			msg, err = b.session.ChannelMessageSendEmbed(statusChannelID, embed)
 			if msg != nil {
@@ -185,24 +197,20 @@ func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChanne
 		dgv.Duration(md.Duration),
 		dgv.Loudness(b.loudness),
 		dgv.OnStart(func() {
-			embed.Title = "▶️ " + md.Title
-			embed.Description = prettyTime(0) + "/" + prettyTime(md.Duration)
-			update()
+			updateEmbed(false, 0, gu.play.Next())
+			updateMessage()
 		}),
 		dgv.OnPause(func(elapsed time.Duration) {
-			embed.Title = "⏸️ " + md.Title
-			embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
-			update()
+			updateEmbed(true, elapsed, gu.play.Next())
+			updateMessage()
 		}),
 		dgv.OnResume(func(elapsed time.Duration) {
-			embed.Title = "▶️ " + md.Title
-			embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
-			update()
+			updateEmbed(false, elapsed, gu.play.Next())
+			updateMessage()
 		}),
 		dgv.OnProgress(func(elapsed time.Duration) {
-			embed.Title = "▶️ " + md.Title
-			embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
-			update()
+			updateEmbed(false, elapsed, gu.play.Next())
+			updateMessage()
 		}, 5*time.Second),
 		dgv.OnEnd(func(elapsed time.Duration, err error) {
 			log.Printf("read %v of %v, expected %v", elapsed, md.Title, md.Duration)
