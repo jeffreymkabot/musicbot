@@ -102,6 +102,7 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 		commands: []*command{
 			help,
 			youtube,
+			bandcamp,
 			skip,
 			pause,
 			clear,

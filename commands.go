@@ -175,6 +175,23 @@ var soundcloud = &command{
 	},
 }
 
+var bandcamp = &command{
+	name: "bandcamp",
+	alias: []string{"bc"},
+	usage: "bandcamp [url]",
+	restrictChannel: true,
+	ack:             "☑",
+	run: func(b *Bot, env *environment, gu *guild, args []string) error {
+		if gu == nil {
+			return ErrGuildCmd
+		}
+		if len(args) == 0 {
+			return errors.New("track please")
+		}
+		return b.enqueue(gu, &plugins.Bandcamp{}, args[0], env.channel.ID)
+	},
+}
+
 var skip = &command{
 	name:  "skip",
 	usage: "skip",
