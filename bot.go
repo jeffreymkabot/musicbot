@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -186,6 +187,9 @@ func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChanne
 				// gu.close() will now wait until the message is deleted
 				gu.wg.Add(1)
 			}
+			if err != nil {
+				log.Print(err)
+			}
 		} else {
 			b.session.ChannelMessageEditEmbed(msg.ChannelID, msg.ID, embed)
 		}
@@ -209,10 +213,17 @@ func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChanne
 			updateEmbed(false, elapsed, gu.play.Next())
 			updateMessage()
 		}),
-		dgv.OnProgress(func(elapsed time.Duration) {
+		dgv.OnProgress(func(elapsed time.Duration, frameTimes []time.Time) {
+			avg, dev, max, min := stats(latencies(frameTimes))
+			embed.Fields = []*discordgo.MessageEmbedField{
+				&discordgo.MessageEmbedField{
+					Name:  "Debug",
+					Value: fmt.Sprintf("`avg %.3fms`, `dev %.3fms`, `max %.3fms`, `min %.3fms`", avg, dev, max, min),
+				},
+			}
 			updateEmbed(false, elapsed, gu.play.Next())
 			updateMessage()
-		}, 5*time.Second),
+		}, 10*time.Second),
 		dgv.OnEnd(func(elapsed time.Duration, err error) {
 			log.Printf("read %v of %v, expected %v", elapsed, md.Title, md.Duration)
 			log.Printf("reason: %v", err)
@@ -222,6 +233,43 @@ func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChanne
 			}
 		}),
 	)
+}
+
+func latencies(times []time.Time) []float64 {
+	// log.Print(times)
+	latencies := make([]float64, len(times)-1)
+	for i := 1; i < len(times); i++ {
+		latencies[i-1] = float64(times[i].Sub(times[i-1]).Nanoseconds()) / 1e6
+	}
+	// log.Print(latencies)
+	return latencies
+}
+
+func stats(data []float64) (avg float64, dev float64, max float64, min float64) {
+	if len(data) == 0 {
+		return
+	}
+	min = math.MaxFloat64
+	max = 0
+	avg = 0
+	dev = 0
+	sum := float64(0)
+	for _, v := range data {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+		sum += v
+	}
+	avg = sum / float64(len(data))
+	for _, v := range data {
+		dev += ((v - avg) * (v - avg))
+	}
+	dev = dev / float64(len(data))
+	dev = math.Sqrt(dev)
+	return
 }
 
 func (b *Bot) addGuild(g *discordgo.Guild) {
