@@ -23,8 +23,9 @@ type guild struct {
 	guildID string
 	play    *dgv.Player
 	wg      sync.WaitGroup
-	// mutex protects guildInfo fields
-	mu sync.RWMutex
+	// mutex protects status msg and guildInfo fields
+	mu        sync.RWMutex
+	statusMsg *discordgo.Message
 	guildInfo
 }
 
@@ -73,6 +74,7 @@ type Bot struct {
 	owner      string
 	soundcloud string
 	loudness   float64
+	me         *discordgo.User
 	guilds     map[string]*guild
 	commands   []*command
 }
@@ -123,8 +125,17 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 	session.AddHandler(onGuildCreate(b))
 	session.AddHandler(onMessageCreate(b))
 	session.AddHandler(onReady(b))
+	session.AddHandler(onMessageReactionAdd(b))
+	session.AddHandler(onMessageReactionRemove(b))
 
 	err = session.Open()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	// possible to take this from ready instead???
+	b.me, err = session.User("@me")
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -143,7 +154,7 @@ func (b *Bot) Stop() {
 	b.mu.Unlock()
 }
 
-func (b *Bot) Enqueue(guildID string, plugin plugins.Plugin, url string, statusChannelID string) error {
+func (b *Bot) Enqueue(guildID string, pl plugins.Plugin, url string, statusChannelID string) error {
 	b.mu.RLock()
 	gu, ok := b.guilds[guildID]
 	b.mu.RUnlock()
@@ -151,23 +162,22 @@ func (b *Bot) Enqueue(guildID string, plugin plugins.Plugin, url string, statusC
 		return errors.New("no player for guild id " + guildID)
 	}
 
-	return b.enqueue(gu, plugin, url, statusChannelID)
+	return b.enqueue(gu, pl, url, statusChannelID)
 }
 
-func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChannelID string) error {
+func (b *Bot) enqueue(gu *guild, pl plugins.Plugin, url string, statusChannelID string) error {
 	musicChannelID := musicChannelFromGuildID(b.session.State, gu.guildID)
 	if musicChannelID == "" {
 		return errors.New("no music channel set up")
 	}
 
-	md, err := plugin.DownloadURL(url)
+	md, err := pl.DownloadURL(url)
 	if err != nil {
 		return err
 	}
 
 	var msg *discordgo.Message
-	embed := &discordgo.MessageEmbed{}
-	embed.Color = 0xa680ee
+	embed := &discordgo.MessageEmbed{Color: 0xa680ee}
 	embed.Footer = &discordgo.MessageEmbedFooter{}
 	updateEmbed := func(isPaused bool, elapsed time.Duration, next string) {
 		if isPaused {
@@ -181,17 +191,22 @@ func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChanne
 		}
 	}
 	updateMessage := func() {
-		if msg == nil {
-			msg, err = b.session.ChannelMessageSendEmbed(statusChannelID, embed)
-			if msg != nil {
-				// gu.close() will now wait until the message is deleted
-				gu.wg.Add(1)
-			}
-			if err != nil {
-				log.Print(err)
-			}
-		} else {
+		if msg != nil {
 			b.session.ChannelMessageEditEmbed(msg.ChannelID, msg.ID, embed)
+			return
+		}
+		msg, err = b.session.ChannelMessageSendEmbed(statusChannelID, embed)
+		if msg != nil {
+			gu.mu.Lock()
+			gu.statusMsg = msg
+			gu.mu.Unlock()
+			// gu.close() will wait until the message is deleted in the OnEnd callback
+			gu.wg.Add(1)
+			b.session.MessageReactionAdd(statusChannelID, msg.ID, pauseCmdEmoji)
+			b.session.MessageReactionAdd(statusChannelID, msg.ID, skipCmdEmoji)
+		}
+		if err != nil {
+			log.Print(err)
 		}
 	}
 
@@ -229,6 +244,9 @@ func (b *Bot) enqueue(gu *guild, plugin plugins.Plugin, url string, statusChanne
 			log.Printf("reason: %v", err)
 			if msg != nil {
 				b.session.ChannelMessageDelete(msg.ChannelID, msg.ID)
+				gu.mu.Lock()
+				gu.statusMsg = nil
+				gu.mu.Unlock()
 				gu.wg.Done()
 			}
 		}),
@@ -250,10 +268,7 @@ func stats(data []float64) (avg float64, dev float64, max float64, min float64) 
 		return
 	}
 	min = math.MaxFloat64
-	max = 0
-	avg = 0
-	dev = 0
-	sum := float64(0)
+	sum := 0.0
 	for _, v := range data {
 		if v < min {
 			min = v

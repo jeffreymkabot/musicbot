@@ -99,7 +99,7 @@ var help = &command{
 	name:  "help",
 	alias: []string{"h"},
 	usage: "help [command name]",
-	ack: "📬",
+	ack:   "📬",
 	run: func(b *Bot, env *environment, gu *guild, args []string) error {
 		// help gets whispered to the user
 		var dm *discordgo.Channel
@@ -176,9 +176,9 @@ var soundcloud = &command{
 }
 
 var bandcamp = &command{
-	name: "bandcamp",
-	alias: []string{"bc"},
-	usage: "bandcamp [url]",
+	name:            "bandcamp",
+	alias:           []string{"bc"},
+	usage:           "bandcamp [url]",
 	restrictChannel: true,
 	ack:             "☑",
 	run: func(b *Bot, env *environment, gu *guild, args []string) error {
@@ -193,8 +193,8 @@ var bandcamp = &command{
 }
 
 var skip = &command{
-	name:  "skip",
-	usage: "skip",
+	name:            "skip",
+	usage:           "skip",
 	restrictChannel: true,
 	run: func(b *Bot, env *environment, gu *guild, args []string) error {
 		if gu == nil {
@@ -208,9 +208,9 @@ var skip = &command{
 }
 
 var pause = &command{
-	name:  "pause",
-	alias: []string{"p"},
-	usage: "pause",
+	name:            "pause",
+	alias:           []string{"p"},
+	usage:           "pause",
 	restrictChannel: true,
 	run: func(b *Bot, env *environment, gu *guild, args []string) error {
 		if gu == nil {
@@ -224,11 +224,11 @@ var pause = &command{
 }
 
 var clear = &command{
-	name:  "clear",
-	alias: []string{"cl"},
-	usage: "clear",
+	name:            "clear",
+	alias:           []string{"cl"},
+	usage:           "clear",
 	restrictChannel: true,
-	ack:   "🔘",
+	ack:             "🔘",
 	run: func(b *Bot, env *environment, gu *guild, args []string) error {
 		if gu == nil {
 			return ErrGuildCmd

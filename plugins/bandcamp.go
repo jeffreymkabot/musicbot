@@ -45,7 +45,7 @@ func (bc *Bandcamp) DownloadURL(arg string) (*Metadata, error) {
 
 	log.Printf("track info %#v", trackinfoJson)
 	// bandcamp reports duration in seconds
-	dur := time.Duration(int(trackinfoJson.Duration * 1000)) * time.Millisecond
+	dur := time.Duration(int(trackinfoJson.Duration*1000)) * time.Millisecond
 	md := &Metadata{
 		DownloadURL: trackinfoJson.File.URL,
 		Title:       trackinfoJson.Title,

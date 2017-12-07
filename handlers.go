@@ -143,3 +143,56 @@ func commandByNameOrAlias(commands []*command, candidate string) *command {
 	}
 	return nil
 }
+
+func onMessageReactionAdd(b *Bot) func(*discordgo.Session, *discordgo.MessageReactionAdd) {
+	return func(session *discordgo.Session, react *discordgo.MessageReactionAdd) {
+		// log.Printf("message reaction add %#v", react.MessageReaction)
+		onReaction(b, session, react.MessageReaction)
+	}
+}
+
+func onMessageReactionRemove(b *Bot) func(*discordgo.Session, *discordgo.MessageReactionRemove) {
+	return func(session *discordgo.Session, react *discordgo.MessageReactionRemove) {
+		// log.Printf("message reaction remove %#v", react.MessageReaction)
+		onReaction(b, session, react.MessageReaction)
+	}
+}
+
+const (
+	pauseCmdEmoji = "⏯"
+	skipCmdEmoji  = "⏭"
+)
+
+func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReaction) {
+	if react.UserID == b.me.ID {
+		return
+	}
+
+	ch, err := session.State.Channel(react.ChannelID)
+	if err != nil {
+		return
+	}
+
+	b.mu.RLock()
+	gu, ok := b.guilds[ch.GuildID]
+	b.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	statusMsgID, statusMsgChID := "", ""
+	gu.mu.RLock()
+	if gu.statusMsg != nil {
+		statusMsgID, statusMsgChID = gu.statusMsg.ID, gu.statusMsg.ChannelID
+	}
+	gu.mu.RUnlock()
+
+	if react.MessageID == statusMsgID && react.ChannelID == statusMsgChID {
+		switch react.Emoji.Name {
+		case pauseCmdEmoji:
+			pause.run(b, nil, gu, nil)
+		case skipCmdEmoji:
+			skip.run(b, nil, gu, nil)
+		}
+	}
+}
