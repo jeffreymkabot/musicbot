@@ -3,7 +3,7 @@ package plugins
 import (
 	"log"
 
-	"github.com/rylio/ytdl"
+	"github.com/jeffreymkabot/ytdl"
 )
 
 type Youtube struct{}
