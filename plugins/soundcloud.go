@@ -3,6 +3,7 @@ package plugins
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,7 +17,7 @@ type Soundcloud struct {
 	ClientID string
 }
 
-func (sc *Soundcloud) DownloadURL(arg string) (*Metadata, error) {
+func (sc *Soundcloud) Resolve(arg string) (*Metadata, error) {
 	if sc.ClientID == "" {
 		return nil, errors.New("no soundcloud client id set up")
 	}
@@ -67,9 +68,12 @@ func (sc *Soundcloud) DownloadURL(arg string) (*Metadata, error) {
 	query = url.Values{}
 	query.Add("client_id", sc.ClientID)
 	md := &Metadata{
-		DownloadURL: dlUrl + "?" + query.Encode(),
-		Title:       respJSON.Title,
-		Duration:    time.Duration(respJSON.Duration) * time.Millisecond,
+		Title:    respJSON.Title,
+		Duration: time.Duration(respJSON.Duration) * time.Millisecond,
+		Open: func() (io.ReadCloser, error) {
+			resp, err := http.Get(dlUrl + "?" + query.Encode())
+			return resp.Body, err
+		},
 	}
 	return md, nil
 }

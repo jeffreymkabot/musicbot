@@ -1,13 +1,16 @@
 package plugins
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 type Metadata struct {
-	DownloadURL string
-	Title       string
-	Duration    time.Duration
+	Title    string
+	Duration time.Duration
+	Open     func() (io.ReadCloser, error)
 }
 
 type Plugin interface {
-	DownloadURL(string) (*Metadata, error)
+	Resolve(string) (*Metadata, error)
 }

@@ -106,6 +106,7 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 			help,
 			youtube,
 			bandcamp,
+			twitch,
 			skip,
 			pause,
 			clear,
@@ -171,7 +172,7 @@ func (b *Bot) enqueue(gu *guild, pl plugins.Plugin, url string, statusChannelID 
 		return errors.New("no music channel set up")
 	}
 
-	md, err := pl.DownloadURL(url)
+	md, err := pl.Resolve(url)
 	if err != nil {
 		return err
 	}
@@ -212,8 +213,8 @@ func (b *Bot) enqueue(gu *guild, pl plugins.Plugin, url string, statusChannelID 
 
 	return gu.play.Enqueue(
 		musicChannelID,
-		md.DownloadURL,
-		dgv.Title(md.Title),
+		md.Title,
+		md.Open,
 		dgv.Duration(md.Duration),
 		dgv.Loudness(b.loudness),
 		dgv.OnStart(func() {

@@ -192,6 +192,22 @@ var bandcamp = &command{
 	},
 }
 
+var twitch = &command{
+	name:            "twitch",
+	usage:           "twitch [url]",
+	restrictChannel: true,
+	ack:             "☑",
+	run: func(b *Bot, env *environment, gu *guild, args []string) error {
+		if gu == nil {
+			return ErrGuildCmd
+		}
+		if len(args) == 0 {
+			return errors.New("channel please")
+		}
+		return b.enqueue(gu, &plugins.Twitch{}, args[0], env.channel.ID)
+	},
+}
+
 var skip = &command{
 	name:            "skip",
 	usage:           "skip",

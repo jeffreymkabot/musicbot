@@ -3,6 +3,7 @@ package plugins
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -14,7 +15,7 @@ type Bandcamp struct{}
 
 var trackinfoRegexp = regexp.MustCompile(`trackinfo: \[({.*})\]`)
 
-func (bc *Bandcamp) DownloadURL(arg string) (*Metadata, error) {
+func (bc *Bandcamp) Resolve(arg string) (*Metadata, error) {
 	resp, err := http.Get(arg)
 	if err != nil {
 		return nil, err
@@ -47,9 +48,12 @@ func (bc *Bandcamp) DownloadURL(arg string) (*Metadata, error) {
 	// bandcamp reports duration in seconds
 	dur := time.Duration(int(trackinfoJson.Duration*1000)) * time.Millisecond
 	md := &Metadata{
-		DownloadURL: trackinfoJson.File.URL,
-		Title:       trackinfoJson.Title,
-		Duration:    dur,
+		Title:    trackinfoJson.Title,
+		Duration: dur,
+		Open: func() (io.ReadCloser, error) {
+			resp, err := http.Get(trackinfoJson.File.URL)
+			return resp.Body, err
+		},
 	}
 	return md, nil
 }
