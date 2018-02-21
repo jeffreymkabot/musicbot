@@ -10,7 +10,7 @@ import (
 
 type Youtube struct{}
 
-func (yt *Youtube) Resolve(arg string) (*Metadata, error) {
+func (yt Youtube) Resolve(arg string) (*Metadata, error) {
 	info, err := ytdl.GetVideoInfo(arg)
 	if err != nil {
 		return nil, err

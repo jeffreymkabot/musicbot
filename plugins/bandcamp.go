@@ -15,7 +15,7 @@ type Bandcamp struct{}
 
 var trackinfoRegexp = regexp.MustCompile(`trackinfo: \[({.*})\]`)
 
-func (bc *Bandcamp) Resolve(arg string) (*Metadata, error) {
+func (bc Bandcamp) Resolve(arg string) (*Metadata, error) {
 	resp, err := http.Get(arg)
 	if err != nil {
 		return nil, err

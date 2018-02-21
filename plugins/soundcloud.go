@@ -17,7 +17,7 @@ type Soundcloud struct {
 	ClientID string
 }
 
-func (sc *Soundcloud) Resolve(arg string) (*Metadata, error) {
+func (sc Soundcloud) Resolve(arg string) (*Metadata, error) {
 	if sc.ClientID == "" {
 		return nil, errors.New("no soundcloud client id set up")
 	}

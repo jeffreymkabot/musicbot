@@ -18,7 +18,7 @@ func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
 				onGuildCreate(b)(session, gc)
 			}
 		}
-		session.UpdateStatus(0, fmt.Sprintf("%s help", defaultPrefix))
+		session.UpdateStatus(0, fmt.Sprintf("%s help", defaultCommandPrefix))
 	}
 }
 
@@ -57,40 +57,57 @@ func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) 
 }
 
 func onDirectMessage(b *Bot, msg *discordgo.Message, ch *discordgo.Channel) {
-	args := strings.Fields(strings.TrimPrefix(msg.Content, defaultPrefix))
+	args := strings.Fields(strings.TrimPrefix(msg.Content, defaultCommandPrefix))
 	if len(args) > 0 {
-		if commandByNameOrAlias(b.commands, strings.ToLower(args[0])) == help {
+		if commandByNameOrAlias(commands, strings.ToLower(args[0])) == &help {
 			args = args[1:]
 		}
 	}
 
-	env := &environment{
+	req := guildRequest{
 		message: msg,
 		channel: ch,
 	}
-	help.run(b, env, nil, args)
+	help.run(nil, req, args)
 }
 
-func onGuildMessage(b *Bot, msg *discordgo.Message, ch *discordgo.Channel) {
+func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
+	req := guildRequest{
+		guildID: channel.GuildID,
+		message: message,
+		channel: channel,
+		callback: func(err error) {
+			if err != nil {
+				b.session.ChannelMessageSend(channel.ID, fmt.Sprintf("🤔...\n%v", err))
+			}
+		},
+	}
+	if ch := b.guildHandlers[channel.GuildID]; ch != nil {
+		ch <- req
+	}
+	return
+}
+
+func onGuildMessage_x(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
 	b.mu.RLock()
-	gu, ok := b.guilds[ch.GuildID]
+	gsvc, ok := b.guilds[channel.GuildID]
 	b.mu.RUnlock()
 	if !ok {
 		return
 	}
 
-	prefix := defaultPrefix
-	gu.mu.RLock()
-	if gu.Prefix != "" {
-		prefix = gu.Prefix
+	prefix := defaultCommandPrefix
+	// gsvc.mu.RLock()
+	if gsvc.Prefix != "" {
+		prefix = gsvc.Prefix
 	}
-	gu.mu.RUnlock()
+	// gsvc.mu.RUnlock()
 
-	if !strings.HasPrefix(msg.Content, prefix) {
+	if !strings.HasPrefix(message.Content, prefix) {
 		return
 	}
 
-	args := strings.Fields(strings.TrimPrefix(msg.Content, prefix))
+	args := strings.Fields(strings.TrimPrefix(message.Content, prefix))
 	if len(args) == 0 {
 		return
 	}
@@ -109,16 +126,16 @@ func onGuildMessage(b *Bot, msg *discordgo.Message, ch *discordgo.Channel) {
 	}
 	log.Printf("candidate cmd %v", candidateCmd)
 
-	cmd := commandByNameOrAlias(b.commands, candidateCmd)
+	cmd := commandByNameOrAlias(commands, candidateCmd)
 	if cmd == nil {
 		return
 	}
 
-	env := &environment{
-		message: msg,
-		channel: ch,
-	}
-	b.exec(cmd, env, gu, args)
+	// env := &environment{
+	// 	message: message,
+	// 	channel: channel,
+	// }
+	// b.exec_x(cmd, env, gsvc, args)
 }
 
 // get "example" in example, example., example.com, www.example.com, www.system.example.com
@@ -164,7 +181,8 @@ const (
 )
 
 func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReaction) {
-	if react.UserID == b.me.ID {
+	author, err := session.User(react.UserID)
+	if err != nil || author.Bot {
 		return
 	}
 
@@ -173,26 +191,30 @@ func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReac
 		return
 	}
 
+	// if ch := b.guildHandlers[channel.GuildID]; ch != nil {
+	// 	ch <- req
+	// }
+
 	b.mu.RLock()
-	gu, ok := b.guilds[ch.GuildID]
+	gsvc, ok := b.guilds[ch.GuildID]
 	b.mu.RUnlock()
 	if !ok {
 		return
 	}
 
 	statusMsgID, statusMsgChID := "", ""
-	gu.mu.RLock()
-	if gu.statusMsg != nil {
-		statusMsgID, statusMsgChID = gu.statusMsg.ID, gu.statusMsg.ChannelID
+	// gsvc.mu.RLock()
+	if gsvc.statusMsg != nil {
+		statusMsgID, statusMsgChID = gsvc.statusMsg.ID, gsvc.statusMsg.ChannelID
 	}
-	gu.mu.RUnlock()
-
+	// gsvc.mu.RUnlock()
+	// TODO how to handle reaction commands
 	if react.MessageID == statusMsgID && react.ChannelID == statusMsgChID {
 		switch react.Emoji.Name {
 		case pauseCmdEmoji:
-			pause.run(b, nil, gu, nil)
+			// pause.run(nil, gsvc, nil)
 		case skipCmdEmoji:
-			skip.run(b, nil, gu, nil)
+			// skip.run(nil, gsvc, nil)
 		}
 	}
 }

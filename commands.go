@@ -2,25 +2,17 @@ package music
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"text/tabwriter"
 
-	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
 var ErrGuildCmd = errors.New("call this command in a guild")
-
-// describe the context of a command invocation
-type environment struct {
-	message *discordgo.Message
-	channel *discordgo.Channel
-}
 
 type command struct {
 	name            string
@@ -31,7 +23,12 @@ type command struct {
 	ownerOnly       bool
 	restrictChannel bool
 	ack             string // must be an emoji, used to react on success
-	run             func(*Bot, *environment, *guild, []string) error
+	run             func(*guildService, guildRequest, []string) error
+}
+
+func matchCommand(args []string) (*command, []string) {
+	// TODO
+	return nil, nil
 }
 
 func helpWithCommand(cmd *command) *discordgo.MessageEmbed {
@@ -62,6 +59,24 @@ func helpWithCommand(cmd *command) *discordgo.MessageEmbed {
 	}
 	return embed
 }
+
+// TODO help references commands slice -> initialization loop
+var commands []*command
+
+// var commands = []*command{
+// 	&help,
+// 	&youtube,
+// 	&soundcloud,
+// 	&twitch,
+// 	&bandcamp,
+// 	&skip,
+// 	&pause,
+// 	&clear,
+// 	&reconnect,
+// 	// setPrefix,
+// 	&setListen,
+// 	&unsetListen,
+// }
 
 func helpWithCommandList(commands []*command) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{}
@@ -95,238 +110,238 @@ func helpWithCommandList(commands []*command) *discordgo.MessageEmbed {
 	return embed
 }
 
-var help = &command{
+var help = command{
 	name:  "help",
 	alias: []string{"h"},
 	usage: "help [command name]",
 	ack:   "📬",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
 		// help gets whispered to the user
 		var dm *discordgo.Channel
 		var err error
-		if env.channel.Type == discordgo.ChannelTypeDM || env.channel.Type == discordgo.ChannelTypeGroupDM {
-			dm = env.channel
-		} else if dm, err = b.session.UserChannelCreate(env.message.Author.ID); err != nil {
+		if req.channel.Type == discordgo.ChannelTypeDM || req.channel.Type == discordgo.ChannelTypeGroupDM {
+			dm = req.channel
+		} else if dm, err = gsvc.session.UserChannelCreate(req.message.Author.ID); err != nil {
 			return err
 		}
 
 		if len(args) > 0 && args[0] != "" {
-			if cmd := commandByNameOrAlias(b.commands, args[0]); cmd != nil {
+			if cmd := commandByNameOrAlias(commands, args[0]); cmd != nil {
 				embed := helpWithCommand(cmd)
-				_, err = b.session.ChannelMessageSendEmbed(dm.ID, embed)
+				_, err = gsvc.session.ChannelMessageSendEmbed(dm.ID, embed)
 				return err
 			}
 		}
 
-		embed := helpWithCommandList(b.commands)
-		_, err = b.session.ChannelMessageSendEmbed(dm.ID, embed)
+		embed := helpWithCommandList(commands)
+		_, err = gsvc.session.ChannelMessageSendEmbed(dm.ID, embed)
 		return err
 	},
 }
 
-var reconnect = &command{
+var reconnect = command{
 	name:            "reconnect",
 	usage:           "reconnect",
 	restrictChannel: true,
 	ack:             "🆗",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
-		g, err := b.session.State.Guild(gu.guildID)
-		if err == nil {
-			b.addGuild(g)
-		}
-		return err
+		gsvc.reconnect()
+		return nil
 	},
 }
 
-var youtube = &command{
+var youtube = command{
 	name:            "youtube",
 	alias:           []string{"yt", "youtu"},
 	usage:           "youtube [url]",
 	restrictChannel: true,
 	ack:             "☑",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
 		if len(args) == 0 {
 			return errors.New("video please")
 		}
-		return b.enqueue(gu, &plugins.Youtube{}, args[0], env.channel.ID)
+		return gsvc.enqueue(plugins.Youtube{}, args[0], req.channel.ID)
 	},
 }
 
-var soundcloud = &command{
+var soundcloud = command{
 	name:            "soundcloud",
 	alias:           []string{"sc", "snd"},
 	usage:           "soundcloud [url]",
 	restrictChannel: true,
 	ack:             "☑",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
 		if len(args) == 0 {
 			return errors.New("track please")
 		}
-		return b.enqueue(gu, &plugins.Soundcloud{ClientID: b.soundcloud}, args[0], env.channel.ID)
+		// TODO soundcloud client id
+		return gsvc.enqueue(plugins.Soundcloud{ClientID: ""}, args[0], req.channel.ID)
 	},
 }
 
-var bandcamp = &command{
+var bandcamp = command{
 	name:            "bandcamp",
 	alias:           []string{"bc"},
 	usage:           "bandcamp [url]",
 	restrictChannel: true,
 	ack:             "☑",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
 		if len(args) == 0 {
 			return errors.New("track please")
 		}
-		return b.enqueue(gu, &plugins.Bandcamp{}, args[0], env.channel.ID)
+		return gsvc.enqueue(plugins.Bandcamp{}, args[0], req.channel.ID)
 	},
 }
 
-var twitch = &command{
+var twitch = command{
 	name:            "twitch",
 	usage:           "twitch [url]",
 	restrictChannel: true,
 	ack:             "☑",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
 		if len(args) == 0 {
 			return errors.New("channel please")
 		}
-		return b.enqueue(gu, &plugins.Twitch{}, args[0], env.channel.ID)
+		return gsvc.enqueue(plugins.Twitch{}, args[0], req.channel.ID)
 	},
 }
 
-var skip = &command{
+var skip = command{
 	name:            "skip",
 	usage:           "skip",
 	restrictChannel: true,
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
-		if err := gu.play.Skip(); err != nil {
+		if err := gsvc.player.Skip(); err != nil {
 			log.Print("nop skip")
 		}
 		return nil
 	},
 }
 
-var pause = &command{
+var pause = command{
 	name:            "pause",
 	alias:           []string{"p"},
 	usage:           "pause",
 	restrictChannel: true,
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
-		if err := gu.play.Pause(); err != nil {
+		if err := gsvc.player.Pause(); err != nil {
 			log.Print("nop pause")
 		}
 		return nil
 	},
 }
 
-var clear = &command{
+var clear = command{
 	name:            "clear",
 	alias:           []string{"cl"},
 	usage:           "clear",
 	restrictChannel: true,
 	ack:             "🔘",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
-		return gu.play.Clear()
+		return gsvc.player.Clear()
 	},
 }
 
-var setPrefix = &command{
+var setPrefix = command{
 	name:  "prefix",
 	usage: "prefix",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
 		if len(args) == 0 || args[0] == "" {
 			return errors.New("prefix please")
 		}
-		gu.mu.Lock()
-		gu.Prefix = args[0]
-		gu.mu.Unlock()
+		// gsvc.mu.Lock()
+		gsvc.Prefix = args[0]
+		// gsvc.mu.Unlock()
 		// db
 		return nil
 	},
 }
 
-var setListen = &command{
+var setListen = command{
 	name:  "whitelist",
 	usage: "whitelist",
 	ack:   "🆗",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		textChannelID := env.channel.ID
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		textChannelID := req.channel.ID
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
 		if textChannelID == "" {
 			return errors.New("channel please")
 		}
-		gu.mu.Lock()
-		if !contains(gu.ListenChannels, textChannelID) {
-			gu.ListenChannels = append(gu.ListenChannels, textChannelID)
+		// gsvc.mu.Lock()
+		if !contains(gsvc.ListenChannels, textChannelID) {
+			gsvc.ListenChannels = append(gsvc.ListenChannels, textChannelID)
 		}
-		gu.mu.Unlock()
+		// gsvc.mu.Unlock()
 		// db
-		return b.db.Update(func(tx *bolt.Tx) error {
-			bucket := tx.Bucket([]byte("guilds"))
-			val, err := json.Marshal(gu.guildInfo)
-			if err != nil {
-				return err
-			}
-			return bucket.Put([]byte(gu.guildID), val)
-		})
+		return gsvc.save()
+		// return b.db.Update(func(tx *bolt.Tx) error {
+		// 	bucket := tx.Bucket([]byte("guilds"))
+		// 	val, err := json.Marshal(gsvc.guildInfo)
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	return bucket.Put([]byte(gsvc.guildID), val)
+		// })
 	},
 }
 
-var unsetListen = &command{
+var unsetListen = command{
 	name:  "unwhitelist",
 	usage: "unwhitelist",
 	ack:   "🆗",
-	run: func(b *Bot, env *environment, gu *guild, args []string) error {
-		textChannelID := env.channel.ID
-		if gu == nil {
+	run: func(gsvc *guildService, req guildRequest, args []string) error {
+		textChannelID := req.channel.ID
+		if gsvc == nil {
 			return ErrGuildCmd
 		}
 		if textChannelID == "" {
 			return errors.New("channel please")
 		}
-		gu.mu.Lock()
-		for i, ch := range gu.ListenChannels {
+		// gsvc.mu.Lock()
+		for i, ch := range gsvc.ListenChannels {
 			if ch == textChannelID {
-				gu.ListenChannels = append(gu.ListenChannels[:i], gu.ListenChannels[i+1:]...)
+				gsvc.ListenChannels = append(gsvc.ListenChannels[:i], gsvc.ListenChannels[i+1:]...)
 			}
 		}
-		gu.mu.Unlock()
+		// gsvc.mu.Unlock()
 		// db
-		return b.db.Update(func(tx *bolt.Tx) error {
-			bucket := tx.Bucket([]byte("guilds"))
-			val, err := json.Marshal(gu.guildInfo)
-			if err != nil {
-				return err
-			}
-			return bucket.Put([]byte(gu.guildID), val)
-		})
+		return gsvc.save()
+		// return b.db.Update(func(tx *bolt.Tx) error {
+		// 	bucket := tx.Bucket([]byte("guilds"))
+		// 	val, err := json.Marshal(gsvc.guildInfo)
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	return bucket.Put([]byte(gsvc.guildID), val)
+		// })
 	},
 }
