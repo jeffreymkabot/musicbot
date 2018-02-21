@@ -2,7 +2,6 @@ package music
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -19,36 +18,16 @@ import (
 const defaultCommandPrefix = "#!"
 const defaultMusicChannelPrefix = "music"
 
-// BotOptions configure runtime parameters of the bot
-type BotOption func(*Bot)
-
 // Soundcloud sets the clientID required by the soundcloud API and enables use of the soundcloud command.
-func Soundcloud(clientID string) BotOption {
-	return func(b *Bot) {
-		if clientID != "" {
-			b.soundcloud = clientID
-			// TODO
-			// b.commands = append(b.commands, soundcloud)
-		}
-	}
-}
-
-// Loudness sets the loudness target.  Higher is louder.
-// See https://ffmpeg.org/ffmpeg-filters.html#loudnorm.
-// Values less than -70.0 or greater than -5.0 have no effect.
-// In particular, the default value of 0 has no effect and input streams will be unchanged.
-func Loudness(f float64) BotOption {
-	return func(b *Bot) {
-		if -70 <= f && f <= -5 {
-			b.loudness = f
-		}
-	}
+func Soundcloud(clientID string) {
+	// TODO
+	// b.soundcloud = clientID
 }
 
 type Bot struct {
 	mu            sync.RWMutex
 	session       *discordgo.Session
-	db            *bolt.DB
+	db            *boltGuildStorage
 	owner         string
 	soundcloud    string
 	loudness      float64
@@ -57,16 +36,9 @@ type Bot struct {
 	guildHandlers map[string](chan<- guildRequest)
 }
 
-func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, error) {
-	db, err := bolt.Open(dbPath, 0600, nil)
+func New(token string, dbPath string, owner string) (*Bot, error) {
+	db, err := newBoltGuildStorage(dbPath)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("guilds"))
-		return err
-	}); err != nil {
 		return nil, err
 	}
 
@@ -83,12 +55,6 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 		guildHandlers: make(map[string]chan<- guildRequest),
 	}
 
-	for _, opt := range opts {
-		opt(b)
-	}
-
-	// log.Printf("available commands %#v", b.commands)
-
 	session.AddHandler(onGuildCreate(b))
 	session.AddHandler(onMessageCreate(b))
 	session.AddHandler(onReady(b))
@@ -104,6 +70,7 @@ func New(token string, dbPath string, owner string, opts ...BotOption) (*Bot, er
 	// possible to take this from ready instead???
 	b.me, err = session.User("@me")
 	if err != nil {
+		session.Close()
 		db.Close()
 		return nil, err
 	}
@@ -119,17 +86,6 @@ func (b *Bot) Stop() {
 	b.session.Close()
 	b.db.Close()
 	b.mu.Unlock()
-}
-
-func (b *Bot) Enqueue(guildID string, pl plugins.Plugin, url string, statusChannelID string) error {
-	b.mu.RLock()
-	gsvc, ok := b.guilds[guildID]
-	b.mu.RUnlock()
-	if !ok || gsvc.player == nil {
-		return errors.New("no player for guild id " + guildID)
-	}
-
-	return b.enqueue(gsvc, pl, url, statusChannelID)
 }
 
 func (b *Bot) enqueue(gsvc *guildService, pl plugins.Plugin, url string, statusChannelID string) error {
@@ -263,49 +219,7 @@ func (b *Bot) addGuild(g *discordgo.Guild) {
 		close(ch)
 		// TODO should wait for service to close
 	}
-	b.guildHandlers[g.ID] = newGuild(b.session, g, nil) // TODO impl guildStorage
-}
-
-func (b *Bot) addGuild_x(g *discordgo.Guild) {
-	// cleanup existing guild structure if exists
-	b.mu.RLock()
-	gsvc, ok := b.guilds[g.ID]
-	b.mu.RUnlock()
-	if ok {
-		gsvc.close()
-		// sometimes reconnecting does not produce a viable voice connection
-		// waiting a few seconds seems to help
-		// TODO figure out why and handle this in better way
-		time.Sleep(3 * time.Second)
-	}
-
-	guInfo := guildInfo{}
-	if err := b.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("guilds"))
-		val := bucket.Get([]byte(g.ID))
-		if val == nil {
-			return nil
-		}
-		return json.Unmarshal(val, &guInfo)
-	}); err != nil {
-		log.Printf("error lookup guild in db %v", err)
-	} else {
-		log.Printf("using guildinfo %#v", guInfo)
-	}
-
-	// prefer to idle in the music channel if one exists at this time
-	musicChannel := detectMusicChannel(g)
-	if musicChannel == "" {
-		musicChannel = g.AfkChannelID
-	}
-	player := dcv.Connect(b.session, g.ID, musicChannel, dcv.QueueLength(10))
-	b.mu.Lock()
-	b.guilds[g.ID] = &guildService{
-		guildID:   g.ID,
-		player:    player,
-		guildInfo: guInfo,
-	}
-	b.mu.Unlock()
+	b.guildHandlers[g.ID] = newGuild(b.session, g, b.db) // TODO impl guildStorage
 }
 
 func detectMusicChannel(g *discordgo.Guild) string {
@@ -327,7 +241,43 @@ func prettyTime(t time.Duration) string {
 	return fmt.Sprintf("%02v:%02v", min, sec)
 }
 
-// TODO
-func isOwner(userID string) bool {
-	return false
+type boltGuildStorage struct {
+	*bolt.DB
+}
+
+func newBoltGuildStorage(dbPath string) (*boltGuildStorage, error) {
+	db, err := bolt.Open(dbPath, 0600, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte("guilds"))
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return &boltGuildStorage{db}, nil
+}
+
+func (db boltGuildStorage) Read(guildID string, info *guildInfo) error {
+	return db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("guilds"))
+		val := bucket.Get([]byte(guildID))
+		if val == nil {
+			return nil
+		}
+		return json.Unmarshal(val, info)
+	})
+}
+
+func (db boltGuildStorage) Write(guildID string, info guildInfo) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("guilds"))
+		val, err := json.Marshal(info)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(guildID), val)
+	})
 }

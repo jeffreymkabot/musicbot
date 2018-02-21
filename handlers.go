@@ -3,7 +3,6 @@ package music
 import (
 	"fmt"
 	"log"
-	"net/url"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -59,7 +58,7 @@ func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) 
 func onDirectMessage(b *Bot, msg *discordgo.Message, ch *discordgo.Channel) {
 	args := strings.Fields(strings.TrimPrefix(msg.Content, defaultCommandPrefix))
 	if len(args) > 0 {
-		if commandByNameOrAlias(commands, strings.ToLower(args[0])) == &help {
+		if commandByNameOrAlias(strings.ToLower(args[0])) == &help {
 			args = args[1:]
 		}
 	}
@@ -86,79 +85,6 @@ func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chann
 		ch <- req
 	}
 	return
-}
-
-func onGuildMessage_x(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
-	b.mu.RLock()
-	gsvc, ok := b.guilds[channel.GuildID]
-	b.mu.RUnlock()
-	if !ok {
-		return
-	}
-
-	prefix := defaultCommandPrefix
-	// gsvc.mu.RLock()
-	if gsvc.Prefix != "" {
-		prefix = gsvc.Prefix
-	}
-	// gsvc.mu.RUnlock()
-
-	if !strings.HasPrefix(message.Content, prefix) {
-		return
-	}
-
-	args := strings.Fields(strings.TrimPrefix(message.Content, prefix))
-	if len(args) == 0 {
-		return
-	}
-
-	// if arg[0] resembles a url, try the url domain as the command name/alias and args are arg[0:]
-	// else, arg[0] is the command name/alias and args are arg[1:]
-	var candidateCmd string
-	if strings.HasPrefix(args[0], "http") {
-		if u, err := url.Parse(args[0]); err == nil {
-			candidateCmd = strings.ToLower(domainFrom(u.Hostname()))
-		}
-	}
-	if candidateCmd == "" {
-		candidateCmd = strings.ToLower(args[0])
-		args = args[1:]
-	}
-	log.Printf("candidate cmd %v", candidateCmd)
-
-	cmd := commandByNameOrAlias(commands, candidateCmd)
-	if cmd == nil {
-		return
-	}
-
-	// env := &environment{
-	// 	message: message,
-	// 	channel: channel,
-	// }
-	// b.exec_x(cmd, env, gsvc, args)
-}
-
-// get "example" in example, example., example.com, www.example.com, www.system.example.com
-func domainFrom(hostname string) string {
-	parts := strings.Split(hostname, ".")
-	if len(parts) < 3 {
-		return parts[0]
-	}
-	return parts[len(parts)-2]
-}
-
-func commandByNameOrAlias(commands []*command, candidate string) *command {
-	for _, cmd := range commands {
-		if candidate == cmd.name {
-			return cmd
-		}
-		for _, alias := range cmd.alias {
-			if candidate == alias {
-				return cmd
-			}
-		}
-	}
-	return nil
 }
 
 func onMessageReactionAdd(b *Bot) func(*discordgo.Session, *discordgo.MessageReactionAdd) {

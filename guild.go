@@ -22,7 +22,7 @@ type guildService struct {
 }
 
 type guildStorage interface {
-	Read(guildID string) (guildInfo, error)
+	Read(guildID string, info *guildInfo) error
 	Write(guildID string, info guildInfo) error
 }
 
@@ -30,7 +30,11 @@ type guildInfo struct {
 	Prefix         string   `json:"prefix"`
 	ListenChannels []string `json:"listen"`
 	MusicChannel   string   `json:"play"`
-	Loudness       float64  `json:"loudness"`
+	// Loudness sets the loudness target.  Higher is louder.
+	// See https://ffmpeg.org/ffmpeg-filters.html#loudnorm.
+	// Values less than -70.0 or greater than -5.0 have no effect.
+	// In particular, the default value of 0 has no effect and audio streams will be unchanged.
+	Loudness float64 `json:"loudness"`
 }
 
 var defaultGuildInfo = guildInfo{
@@ -52,9 +56,7 @@ func newGuild(session *discordgo.Session, guild *discordgo.Guild, store guildSto
 		session: session,
 	}
 
-	if info, err := store.Read(guild.ID); err == nil {
-		gsvc.guildInfo = info
-	} else {
+	if err := store.Read(guild.ID, &gsvc.guildInfo); err != nil {
 		gsvc.guildInfo = defaultGuildInfo
 		gsvc.MusicChannel = detectMusicChannel(guild)
 	}
@@ -90,7 +92,7 @@ func (gsvc *guildService) handle(req guildRequest) {
 	}
 
 	args := strings.Fields(strings.TrimPrefix(req.message.Content, gsvc.Prefix))
-	cmd, args := matchCommand(args)
+	cmd, args := parseCommand(args)
 	if cmd == nil {
 		return
 	}
@@ -157,5 +159,10 @@ func contains(s []string, t string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+// TODO
+func isOwner(userID string) bool {
 	return false
 }

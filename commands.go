@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"text/tabwriter"
 
@@ -26,9 +27,51 @@ type command struct {
 	run             func(*guildService, guildRequest, []string) error
 }
 
-func matchCommand(args []string) (*command, []string) {
-	// TODO
-	return nil, nil
+// nil if none matching
+func parseCommand(args []string) (*command, []string) {
+	if len(args) == 0 {
+		return nil, args
+	}
+	// if arg[0] resembles a url try the domain as a command name/alias and args are arg[0:]
+	// else try arg[0] is a command name/alias and args are arg[1:]
+	candidateCmd := ""
+	if strings.HasPrefix(args[0], "http") {
+		if u, err := url.Parse(args[0]); err == nil {
+			candidateCmd = strings.ToLower(domainFrom(u.Hostname()))
+			if cmd := commandByNameOrAlias(candidateCmd); cmd != nil {
+				return cmd, args
+			}
+		}
+	}
+	candidateCmd = strings.ToLower(args[0])
+	if cmd := commandByNameOrAlias(candidateCmd); cmd != nil {
+		return cmd, args[1:]
+	}
+	// TODO if still none try to see if streamlink will handle the url and synthesize a command
+	return nil, args
+}
+
+// get "example" in example, example., example.com, www.example.com, www.system.example.com
+func domainFrom(hostname string) string {
+	parts := strings.Split(hostname, ".")
+	if len(parts) < 3 {
+		return parts[0]
+	}
+	return parts[len(parts)-2]
+}
+
+func commandByNameOrAlias(candidate string) *command {
+	for _, cmd := range commands {
+		if candidate == cmd.name {
+			return cmd
+		}
+		for _, alias := range cmd.alias {
+			if candidate == alias {
+				return cmd
+			}
+		}
+	}
+	return nil
 }
 
 func helpWithCommand(cmd *command) *discordgo.MessageEmbed {
@@ -61,6 +104,7 @@ func helpWithCommand(cmd *command) *discordgo.MessageEmbed {
 }
 
 // TODO help references commands slice -> initialization loop
+// review use of global slice :/
 var commands []*command
 
 // var commands = []*command{
@@ -126,7 +170,7 @@ var help = command{
 		}
 
 		if len(args) > 0 && args[0] != "" {
-			if cmd := commandByNameOrAlias(commands, args[0]); cmd != nil {
+			if cmd := commandByNameOrAlias(args[0]); cmd != nil {
 				embed := helpWithCommand(cmd)
 				_, err = gsvc.session.ChannelMessageSendEmbed(dm.ID, embed)
 				return err
@@ -276,11 +320,8 @@ var setPrefix = command{
 		if len(args) == 0 || args[0] == "" {
 			return errors.New("prefix please")
 		}
-		// gsvc.mu.Lock()
 		gsvc.Prefix = args[0]
-		// gsvc.mu.Unlock()
-		// db
-		return nil
+		return gsvc.save()
 	},
 }
 
@@ -296,21 +337,10 @@ var setListen = command{
 		if textChannelID == "" {
 			return errors.New("channel please")
 		}
-		// gsvc.mu.Lock()
 		if !contains(gsvc.ListenChannels, textChannelID) {
 			gsvc.ListenChannels = append(gsvc.ListenChannels, textChannelID)
 		}
-		// gsvc.mu.Unlock()
-		// db
 		return gsvc.save()
-		// return b.db.Update(func(tx *bolt.Tx) error {
-		// 	bucket := tx.Bucket([]byte("guilds"))
-		// 	val, err := json.Marshal(gsvc.guildInfo)
-		// 	if err != nil {
-		// 		return err
-		// 	}
-		// 	return bucket.Put([]byte(gsvc.guildID), val)
-		// })
 	},
 }
 
@@ -326,22 +356,11 @@ var unsetListen = command{
 		if textChannelID == "" {
 			return errors.New("channel please")
 		}
-		// gsvc.mu.Lock()
 		for i, ch := range gsvc.ListenChannels {
 			if ch == textChannelID {
 				gsvc.ListenChannels = append(gsvc.ListenChannels[:i], gsvc.ListenChannels[i+1:]...)
 			}
 		}
-		// gsvc.mu.Unlock()
-		// db
 		return gsvc.save()
-		// return b.db.Update(func(tx *bolt.Tx) error {
-		// 	bucket := tx.Bucket([]byte("guilds"))
-		// 	val, err := json.Marshal(gsvc.guildInfo)
-		// 	if err != nil {
-		// 		return err
-		// 	}
-		// 	return bucket.Put([]byte(gsvc.guildID), val)
-		// })
 	},
 }
