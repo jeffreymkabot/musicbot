@@ -3,7 +3,6 @@ package music
 import (
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -17,22 +16,21 @@ func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
 				onGuildCreate(b)(session, gc)
 			}
 		}
-		session.UpdateStatus(0, fmt.Sprintf("%s help", defaultCommandPrefix))
+		session.UpdateStatus(0, defaultCommandPrefix+" "+help.name)
 	}
 }
 
 func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 	return func(session *discordgo.Session, gc *discordgo.GuildCreate) {
 		log.Printf("guild create %v", gc.Guild.ID)
-
-		// will cleanup existing guild structure if exists
-		// e.g. disconnected, kicked and reinvited
+		// will cleanup existing guild service if exists
+		// e.g. if unhandled disconnect, kick and reinvite
 		b.addGuild(gc.Guild)
 	}
 }
 
-// worth noting that discordgo event handlers are executed in new goroutines,
-// hence all command invocations are necessarily async
+// worth noting that discordgo event handlers are by default executed in new goroutines
+// all command invocations are async
 func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) {
 	return func(session *discordgo.Session, mc *discordgo.MessageCreate) {
 		if mc.Author.Bot {
@@ -55,36 +53,39 @@ func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) 
 	}
 }
 
-func onDirectMessage(b *Bot, msg *discordgo.Message, ch *discordgo.Channel) {
-	args := strings.Fields(strings.TrimPrefix(msg.Content, defaultCommandPrefix))
-	if len(args) > 0 {
-		if commandByNameOrAlias(strings.ToLower(args[0])) == &help {
-			args = args[1:]
-		}
-	}
-
-	req := guildRequest{
-		message: msg,
-		channel: ch,
-	}
-	help.run(nil, req, args)
-}
-
 func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
-	req := guildRequest{
-		guildID: channel.GuildID,
-		message: message,
-		channel: channel,
-		callback: func(err error) {
+	req := GuildRequest{
+		GuildID: channel.GuildID,
+		Message: message,
+		Channel: channel,
+		Callback: func(err error) {
 			if err != nil {
 				b.session.ChannelMessageSend(channel.ID, fmt.Sprintf("🤔...\n%v", err))
 			}
 		},
 	}
-	if gh := b.guildClients[channel.GuildID]; gh != nil {
-		gh.send(req)
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if svc := b.guildServices[channel.GuildID]; svc != nil {
+		svc.Send(req)
 	}
 	return
+}
+
+// TODO port direct message -> dm help command
+func onDirectMessage(b *Bot, msg *discordgo.Message, ch *discordgo.Channel) {
+	// args := strings.Fields(strings.TrimPrefix(msg.Content, defaultCommandPrefix))
+	// if len(args) > 0 {
+	// 	if commandByNameOrAlias(strings.ToLower(args[0])) == &help {
+	// 		args = args[1:]
+	// 	}
+	// }
+
+	// req := GuildRequest{
+	// 	Message: msg,
+	// 	Channel: ch,
+	// }
+	// help.run(nil, req, args)
 }
 
 func onMessageReactionAdd(b *Bot) func(*discordgo.Session, *discordgo.MessageReactionAdd) {
@@ -106,35 +107,35 @@ const (
 	skipCmdEmoji  = "⏭"
 )
 
+// TODO port reaction -> GuildRequest
 func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReaction) {
 	author, err := session.User(react.UserID)
 	if err != nil || author.Bot {
 		return
 	}
 
-	ch, err := session.State.Channel(react.ChannelID)
-	if err != nil {
-		return
-	}
+	// ch, err := session.State.Channel(react.ChannelID)
+	// if err != nil {
+	// 	return
+	// }
 
 	// if ch := b.guildHandlers[channel.GuildID]; ch != nil {
 	// 	ch <- req
 	// }
 
 	b.mu.RLock()
-	gsvc, ok := b.guilds[ch.GuildID]
+	// gsvc, ok := b.guilds[ch.GuildID]
 	b.mu.RUnlock()
-	if !ok {
-		return
-	}
+	// if !ok {
+	// 	return
+	// }
 
 	statusMsgID, statusMsgChID := "", ""
 	// gsvc.mu.RLock()
-	if gsvc.statusMsg != nil {
-		statusMsgID, statusMsgChID = gsvc.statusMsg.ID, gsvc.statusMsg.ChannelID
-	}
+	// if gsvc.statusMsg != nil {
+	// 	statusMsgID, statusMsgChID = gsvc.statusMsg.ID, gsvc.statusMsg.ChannelID
+	// }
 	// gsvc.mu.RUnlock()
-	// TODO how to handle reaction commands
 	if react.MessageID == statusMsgID && react.ChannelID == statusMsgChID {
 		switch react.Emoji.Name {
 		case pauseCmdEmoji:

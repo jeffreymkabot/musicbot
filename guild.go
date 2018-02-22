@@ -2,52 +2,72 @@ package music
 
 import (
 	"errors"
+	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	dcv "github.com/jeffreymkabot/discordvoice"
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
-type guildClient interface {
-	send(guildRequest)
-	close()
+var ErrGuildClientTimeout = errors.New("request timeout")
+var ErrGuildClientClosed = errors.New("client is disposed")
+
+// GuildService handles incoming GuildRequests.
+// Close is idempotent.
+type GuildService interface {
+	Send(GuildRequest) error
+	Close()
 }
 
-type syncGuildClient struct {
-	ch chan<- guildRequest
-	wg sync.WaitGroup
+type syncGuildService struct {
+	ch     chan<- GuildRequest
+	wg     sync.WaitGroup
+	closed chan struct{}
 }
 
-func (gh syncGuildClient) send(req guildRequest) {
-	gh.ch <- req
+func (svc *syncGuildService) Send(req GuildRequest) error {
+	select {
+	case svc.ch <- req:
+	case <-svc.closed:
+		return ErrGuildClientClosed
+	case <-time.After(1 * time.Second):
+		return ErrGuildClientTimeout
+	}
+	return nil
 }
 
-func (gh *syncGuildClient) close() {
-	if gh.ch != nil {
-		close(gh.ch)
-		gh.ch = nil
-		gh.wg.Wait()
+func (svc *syncGuildService) Close() {
+	select {
+	case <-svc.closed:
+	default:
+		close(svc.closed)
+		close(svc.ch)
+		svc.wg.Wait()
 	}
 }
 
 type guildService struct {
-	guildInfo
-	guildID   string
-	store     guildStorage
-	session   *discordgo.Session
-	statusMsg *discordgo.Message
-	player    *dcv.Player
+	syncGuildService
+	GuildInfo
+	guildID string
+	store   GuildStorage
+	session *discordgo.Session
+	player  *dcv.Player
 }
 
-type guildStorage interface {
-	read(guildID string, info *guildInfo) error
-	write(guildID string, info guildInfo) error
+// GuildStorage is used to persist and retrieve guild configuration.
+type GuildStorage interface {
+	Read(guildID string, info *GuildInfo) error
+	Write(guildID string, info GuildInfo) error
 }
 
-type guildInfo struct {
+// GuildInfo members are persisted using GuildStorage
+type GuildInfo struct {
 	Prefix         string   `json:"prefix"`
 	ListenChannels []string `json:"listen"`
 	MusicChannel   string   `json:"play"`
@@ -58,27 +78,29 @@ type guildInfo struct {
 	Loudness float64 `json:"loudness"`
 }
 
-var defaultGuildInfo = guildInfo{
+var defaultGuildInfo = GuildInfo{
 	Prefix: defaultCommandPrefix,
 }
 
-type guildRequest struct {
-	guildID  string
-	message  *discordgo.Message
-	channel  *discordgo.Channel
-	command  command
-	callback func(err error)
+// GuildRequest provides instructions to a GuildService.
+type GuildRequest struct {
+	GuildID  string
+	Message  *discordgo.Message
+	Channel  *discordgo.Channel
+	Callback func(err error)
 }
 
-func newGuild(session *discordgo.Session, guild *discordgo.Guild, store guildStorage) guildClient {
+// Guild creates a new GuildService.
+// The service returned is safe to use in multiple threads.
+func Guild(session *discordgo.Session, guild *discordgo.Guild, store GuildStorage) GuildService {
 	gsvc := guildService{
 		guildID: guild.ID,
 		store:   store,
 		session: session,
 	}
 
-	if err := store.read(guild.ID, &gsvc.guildInfo); err != nil {
-		gsvc.guildInfo = defaultGuildInfo
+	if err := store.Read(guild.ID, &gsvc.GuildInfo); err != nil {
+		gsvc.GuildInfo = defaultGuildInfo
 		gsvc.MusicChannel = detectMusicChannel(guild)
 	}
 
@@ -94,48 +116,46 @@ func newGuild(session *discordgo.Session, guild *discordgo.Guild, store guildSto
 		dcv.QueueLength(10),
 	)
 
-	ch := make(chan guildRequest)
-	wg := sync.WaitGroup{}
-	wg.Add(1)
+	ch := make(chan GuildRequest)
+	gsvc.syncGuildService = syncGuildService{ch, sync.WaitGroup{}, make(chan struct{})}
+	gsvc.wg.Add(1)
 	go func() {
 		for request := range ch {
 			gsvc.handle(request)
 		}
-		// chan closed
 		gsvc.player.Quit()
-		wg.Done()
+		gsvc.wg.Done()
 	}()
-	return &syncGuildClient{ch, wg}
+	return &gsvc
 }
 
-func (gsvc *guildService) handle(req guildRequest) {
-	if !strings.HasPrefix(req.message.Content, gsvc.Prefix) && !strings.HasPrefix(req.message.Content, defaultCommandPrefix) {
+func (gsvc *guildService) handle(req GuildRequest) {
+	if !strings.HasPrefix(req.Message.Content, gsvc.Prefix) && !strings.HasPrefix(req.Message.Content, defaultCommandPrefix) {
 		return
 	}
 
-	args := strings.Fields(strings.TrimPrefix(req.message.Content, gsvc.Prefix))
+	args := strings.Fields(strings.TrimPrefix(req.Message.Content, gsvc.Prefix))
 	cmd, args := parseCommand(args)
 	if cmd == nil {
 		return
 	}
 
-	if cmd.restrictChannel && !contains(gsvc.ListenChannels, req.channel.ID) {
-		log.Printf("command %s invoked in unregistered channel %s", cmd.name, req.channel.ID)
+	if cmd.restrictChannel && !contains(gsvc.ListenChannels, req.Channel.ID) {
+		log.Printf("command %s invoked in unregistered channel %s", cmd.name, req.Channel.ID)
 		return
 	}
 
-	if cmd.ownerOnly && !isOwner(req.message.Author.ID) {
-		log.Printf("user %s not allowed to execute command %s", req.message.Author.ID, cmd.name)
+	if cmd.ownerOnly && !isOwner(req.Message.Author.ID) {
+		log.Printf("user %s not allowed to execute command %s", req.Message.Author.ID, cmd.name)
 		return
 	}
 
-	// TODO
 	err := cmd.run(gsvc, req, args)
 	if err == nil && cmd.ack != "" {
-		gsvc.session.MessageReactionAdd(req.channel.ID, req.message.ID, cmd.ack)
+		gsvc.session.MessageReactionAdd(req.Channel.ID, req.Message.ID, cmd.ack)
 	}
-	if req.callback != nil {
-		req.callback(err)
+	if req.Callback != nil {
+		req.Callback(err)
 	}
 }
 
@@ -150,23 +170,117 @@ func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID 
 		return err
 	}
 
+	statusMessageID := ""
+	embed := &discordgo.MessageEmbed{}
+	embed.Color = 0xa680ee
+	embed.Footer = &discordgo.MessageEmbedFooter{}
+	refreshStatus := func(playing bool, elapsed time.Duration, next string) {
+		if playing {
+			embed.Title = "▶️ " + md.Title
+		} else {
+			embed.Title = "⏸️ " + md.Title
+		}
+		embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
+		if next != "" {
+			embed.Footer.Text = "On Deck: " + next
+		}
+
+		if statusMessageID == "" {
+			msg, err := gsvc.session.ChannelMessageSendEmbed(statusChannelID, embed)
+			if err != nil {
+				log.Printf("failed to display player status", err)
+				return
+			}
+			statusMessageID = msg.ID
+			// wait for the status message to be deleted when the guildservice closes
+			gsvc.wg.Add(1)
+			gsvc.session.MessageReactionAdd(statusChannelID, statusMessageID, pauseCmdEmoji)
+			gsvc.session.MessageReactionAdd(statusChannelID, statusMessageID, skipCmdEmoji)
+		} else {
+			_, err := gsvc.session.ChannelMessageEditEmbed(statusChannelID, statusMessageID, embed)
+			if err != nil {
+				log.Printf("failed to refresh player status", err)
+			}
+		}
+	}
+
 	return gsvc.player.Enqueue(
 		musicChannelID,
 		md.Title,
 		md.Open,
 		dcv.Duration(md.Duration),
 		dcv.Loudness(gsvc.Loudness),
-		// TODO status message
+		dcv.OnStart(func() { refreshStatus(true, 0, gsvc.player.Next()) }),
+		dcv.OnPause(func(d time.Duration) { refreshStatus(false, d, gsvc.player.Next()) }),
+		dcv.OnResume(func(d time.Duration) { refreshStatus(true, d, gsvc.player.Next()) }),
+		dcv.OnProgress(
+			func(d time.Duration, frames []time.Time) {
+				avg, dev, max, min := statistics(latencies(frames))
+				embed.Fields = []*discordgo.MessageEmbedField{
+					&discordgo.MessageEmbedField{
+						Name:  "Debug",
+						Value: fmt.Sprintf("`avg %.3fms`, `dev %.3fms`, `max %.3fms`, `min %.3fms`", avg, dev, max, min),
+					},
+				}
+				refreshStatus(true, d, gsvc.player.Next())
+			},
+			5*time.Second,
+		),
+		dcv.OnEnd(func(d time.Duration, err error) {
+			log.Printf("read %v of %v, expected %v", d, md.Title, md.Duration)
+			log.Printf("reason: %v", err)
+			gsvc.session.ChannelMessageDelete(statusChannelID, statusMessageID)
+			gsvc.wg.Done()
+		}),
 	)
 }
 
 func (gsvc *guildService) save() error {
-	return gsvc.store.write(gsvc.guildID, gsvc.guildInfo)
+	return gsvc.store.Write(gsvc.guildID, gsvc.GuildInfo)
 }
 
 func (gsvc *guildService) reconnect() {
+	// TODO make sure discordvoice.player.Quit waits for the sendSong goroutine to finish
 	gsvc.player.Quit()
-	// TODO
+	gsvc.player = dcv.Connect(
+		gsvc.session,
+		gsvc.guildID,
+		gsvc.MusicChannel,
+		dcv.QueueLength(10),
+	)
+}
+
+// frame-to-frame latency in milliseconds
+func latencies(times []time.Time) []float64 {
+	latencies := make([]float64, len(times)-1)
+	for i := 1; i < len(times); i++ {
+		latencies[i-1] = float64(times[i].Sub(times[i-1]).Nanoseconds()) / 1e6
+	}
+	return latencies
+}
+
+func statistics(data []float64) (avg float64, dev float64, max float64, min float64) {
+	if len(data) == 0 {
+		return
+	}
+	min = math.MaxFloat64
+	sum := 0.0
+	for _, v := range data {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+		sum += v
+	}
+	avg = sum / float64(len(data))
+	for _, v := range data {
+		dev += ((v - avg) * (v - avg))
+	}
+	dev = dev / float64(len(data))
+	dev = math.Sqrt(dev)
+	return
 }
 
 func contains(s []string, t string) bool {
