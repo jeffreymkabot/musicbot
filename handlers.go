@@ -61,8 +61,9 @@ func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) 
 // dispatch request to the corresponding guild service
 func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
 	req := GuildRequest{
-		Message: message,
 		Channel: channel,
+		Message: message,
+		Body:    message.Content,
 		Callback: func(err error) {
 			if err != nil {
 				b.session.ChannelMessageSend(channel.ID, fmt.Sprintf("🤔...\n%v", err))
@@ -74,14 +75,13 @@ func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chann
 	if svc, ok := b.guildServices[channel.GuildID]; ok {
 		svc.Send(req)
 	}
-	return
 }
 
 // execute the help command with a nil guild service
 func onDirectMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
 	req := GuildRequest{
-		Message: message,
 		Channel: channel,
+		Message: message,
 	}
 	args := strings.Fields(strings.TrimPrefix(req.Message.Content, defaultCommandPrefix))
 	cmd, parsedArgs, ok := parseCommand(args)
@@ -128,7 +128,11 @@ func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReac
 	req := GuildRequest{
 		Channel: channel,
 		Message: message,
+		Body: react.Emoji.Name,
 	}
-	// TODO
-	_ = req
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if svc, ok := b.guildServices[channel.GuildID]; ok {
+		svc.Send(req)
+	}
 }

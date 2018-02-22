@@ -58,6 +58,9 @@ type guildService struct {
 	store   GuildStorage
 	session *discordgo.Session
 	player  *dcv.Player
+	// TODO how to manage statusMessage state in a reasonable way without mutex?
+	mu                  sync.Mutex
+	playerStatusMessage *discordgo.Message
 }
 
 // GuildStorage is used to persist and retrieve guild configuration.
@@ -83,11 +86,21 @@ var defaultGuildInfo = GuildInfo{
 }
 
 // GuildRequest provides instructions to a GuildService.
+// TODO would it help code organization to make this an interface ?
 type GuildRequest struct {
-	Message  *discordgo.Message
+	Type     GuildRequestType
 	Channel  *discordgo.Channel
+	Message  *discordgo.Message
+	Body     string
 	Callback func(err error)
 }
+
+type GuildRequestType int
+
+const (
+	MessageRequest GuildRequestType = iota
+	ReactRequest
+)
 
 // Guild creates a new GuildService.
 // The service returned is safe to use in multiple threads.
@@ -115,25 +128,37 @@ func Guild(session *discordgo.Session, guild *discordgo.Guild, store GuildStorag
 		dcv.QueueLength(10),
 	)
 
-	ch := make(chan GuildRequest)
-	gsvc.syncGuildService = syncGuildService{ch, sync.WaitGroup{}, make(chan struct{})}
+	requestChan := make(chan GuildRequest)
+	gsvc.syncGuildService = syncGuildService{
+		ch:     requestChan,
+		wg:     sync.WaitGroup{},
+		closed: make(chan struct{}),
+	}
+
 	gsvc.wg.Add(1)
 	go func() {
-		for request := range ch {
-			gsvc.handle(request)
+		for req := range requestChan {
+			switch req.Type {
+			case MessageRequest:
+				gsvc.handleMessageRequest(req)
+			case ReactRequest:
+				gsvc.handleReactionRequest(req)
+			}
 		}
 		gsvc.player.Quit()
 		gsvc.wg.Done()
 	}()
+
 	return &gsvc
 }
 
-func (gsvc *guildService) handle(req GuildRequest) {
-	if !strings.HasPrefix(req.Message.Content, gsvc.Prefix) && !strings.HasPrefix(req.Message.Content, defaultCommandPrefix) {
+// act only on messages beginning with the appropriate prefix in the appropriate channel by an appropriate user
+func (gsvc *guildService) handleMessageRequest(req GuildRequest) {
+	if !strings.HasPrefix(req.Body, gsvc.Prefix) && !strings.HasPrefix(req.Body, defaultCommandPrefix) {
 		return
 	}
 
-	args := strings.Fields(strings.TrimPrefix(req.Message.Content, gsvc.Prefix))
+	args := strings.Fields(strings.TrimPrefix(req.Body, gsvc.Prefix))
 	cmd, args, ok := parseCommand(args)
 	if !ok {
 		return
@@ -155,6 +180,21 @@ func (gsvc *guildService) handle(req GuildRequest) {
 	}
 	if req.Callback != nil {
 		req.Callback(err)
+	}
+}
+
+// act only on reactions placed on the status message
+func (gsvc *guildService) handleReactionRequest(req GuildRequest) {
+	gsvc.mu.Lock()
+	statusChannelID, statusMessageID := gsvc.playerStatusMessage.ID, gsvc.playerStatusMessage.ChannelID
+	gsvc.mu.Unlock()
+	if req.Channel.ID == statusChannelID && req.Message.ID == statusMessageID {
+		for _, cmd := range commands {
+			if cmd.shortcut == req.Body {
+				cmd.run(gsvc, req, nil)
+				return
+			}
+		}
 	}
 }
 
@@ -191,8 +231,14 @@ func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID 
 				return
 			}
 			statusMessageID = msg.ID
+
 			// wait for the status message to be deleted when the guildservice closes
 			gsvc.wg.Add(1)
+
+			gsvc.mu.Lock()
+			gsvc.playerStatusMessage = msg
+			gsvc.mu.Unlock()
+
 			for _, cmd := range commands {
 				if cmd.shortcut != "" {
 					gsvc.session.MessageReactionAdd(statusChannelID, statusMessageID, cmd.shortcut)
@@ -231,8 +277,10 @@ func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID 
 		dcv.OnEnd(func(d time.Duration, err error) {
 			log.Printf("read %v of %v, expected %v", d, md.Title, md.Duration)
 			log.Printf("reason: %v", err)
-			gsvc.session.ChannelMessageDelete(statusChannelID, statusMessageID)
-			gsvc.wg.Done()
+			if statusMessageID != "" {
+				gsvc.session.ChannelMessageDelete(statusChannelID, statusMessageID)
+				gsvc.wg.Done()
+			}
 		}),
 	)
 }
