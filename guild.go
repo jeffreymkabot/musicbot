@@ -84,7 +84,6 @@ var defaultGuildInfo = GuildInfo{
 
 // GuildRequest provides instructions to a GuildService.
 type GuildRequest struct {
-	GuildID  string
 	Message  *discordgo.Message
 	Channel  *discordgo.Channel
 	Callback func(err error)
@@ -135,8 +134,8 @@ func (gsvc *guildService) handle(req GuildRequest) {
 	}
 
 	args := strings.Fields(strings.TrimPrefix(req.Message.Content, gsvc.Prefix))
-	cmd, args := parseCommand(args)
-	if cmd == nil {
+	cmd, args, ok := parseCommand(args)
+	if !ok {
 		return
 	}
 
@@ -194,8 +193,11 @@ func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID 
 			statusMessageID = msg.ID
 			// wait for the status message to be deleted when the guildservice closes
 			gsvc.wg.Add(1)
-			gsvc.session.MessageReactionAdd(statusChannelID, statusMessageID, pauseCmdEmoji)
-			gsvc.session.MessageReactionAdd(statusChannelID, statusMessageID, skipCmdEmoji)
+			for _, cmd := range commands {
+				if cmd.shortcut != "" {
+					gsvc.session.MessageReactionAdd(statusChannelID, statusMessageID, cmd.shortcut)
+				}
+			}
 		} else {
 			_, err := gsvc.session.ChannelMessageEditEmbed(statusChannelID, statusMessageID, embed)
 			if err != nil {
@@ -248,6 +250,16 @@ func (gsvc *guildService) reconnect() {
 		gsvc.MusicChannel,
 		dcv.QueueLength(10),
 	)
+}
+
+func prettyTime(t time.Duration) string {
+	hours := int(t.Hours())
+	min := int(t.Minutes()) % 60
+	sec := int(t.Seconds()) % 60
+	if hours >= 1 {
+		return fmt.Sprintf("%02v:%02v:%02v", hours, min, sec)
+	}
+	return fmt.Sprintf("%02v:%02v", min, sec)
 }
 
 // frame-to-frame latency in milliseconds

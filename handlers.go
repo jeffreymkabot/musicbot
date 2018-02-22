@@ -3,6 +3,7 @@ package music
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -23,9 +24,13 @@ func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
 func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 	return func(session *discordgo.Session, gc *discordgo.GuildCreate) {
 		log.Printf("guild create %v", gc.Guild.ID)
-		// will cleanup existing guild service if exists
-		// e.g. if unhandled disconnect, kick and reinvite
-		b.addGuild(gc.Guild)
+		// cleanup existing guild service if exists
+		// e.g. unhandled disconnect, kick and reinvite
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		svc := b.guildServices[gc.Guild.ID]
+		svc.Close()
+		b.guildServices[gc.Guild.ID] = Guild(b.session, gc.Guild, b.db)
 	}
 }
 
@@ -53,9 +58,9 @@ func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) 
 	}
 }
 
+// dispatch request to the corresponding guild service
 func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
 	req := GuildRequest{
-		GuildID: channel.GuildID,
 		Message: message,
 		Channel: channel,
 		Callback: func(err error) {
@@ -66,26 +71,27 @@ func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chann
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	if svc := b.guildServices[channel.GuildID]; svc != nil {
+	if svc, ok := b.guildServices[channel.GuildID]; ok {
 		svc.Send(req)
 	}
 	return
 }
 
-// TODO port direct message -> dm help command
-func onDirectMessage(b *Bot, msg *discordgo.Message, ch *discordgo.Channel) {
-	// args := strings.Fields(strings.TrimPrefix(msg.Content, defaultCommandPrefix))
-	// if len(args) > 0 {
-	// 	if commandByNameOrAlias(strings.ToLower(args[0])) == &help {
-	// 		args = args[1:]
-	// 	}
-	// }
-
-	// req := GuildRequest{
-	// 	Message: msg,
-	// 	Channel: ch,
-	// }
-	// help.run(nil, req, args)
+// execute the help command with a nil guild service
+func onDirectMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
+	req := GuildRequest{
+		Message: message,
+		Channel: channel,
+	}
+	args := strings.Fields(strings.TrimPrefix(req.Message.Content, defaultCommandPrefix))
+	cmd, parsedArgs, ok := parseCommand(args)
+	if !ok {
+		help.run(nil, req, nil)
+	} else if cmd.name != help.name {
+		help.run(nil, req, args)
+	} else {
+		help.run(nil, req, parsedArgs)
+	}
 }
 
 func onMessageReactionAdd(b *Bot) func(*discordgo.Session, *discordgo.MessageReactionAdd) {
@@ -102,11 +108,6 @@ func onMessageReactionRemove(b *Bot) func(*discordgo.Session, *discordgo.Message
 	}
 }
 
-const (
-	pauseCmdEmoji = "⏯"
-	skipCmdEmoji  = "⏭"
-)
-
 // TODO port reaction -> GuildRequest
 func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReaction) {
 	author, err := session.User(react.UserID)
@@ -114,34 +115,20 @@ func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReac
 		return
 	}
 
-	// ch, err := session.State.Channel(react.ChannelID)
-	// if err != nil {
-	// 	return
-	// }
-
-	// if ch := b.guildHandlers[channel.GuildID]; ch != nil {
-	// 	ch <- req
-	// }
-
-	b.mu.RLock()
-	// gsvc, ok := b.guilds[ch.GuildID]
-	b.mu.RUnlock()
-	// if !ok {
-	// 	return
-	// }
-
-	statusMsgID, statusMsgChID := "", ""
-	// gsvc.mu.RLock()
-	// if gsvc.statusMsg != nil {
-	// 	statusMsgID, statusMsgChID = gsvc.statusMsg.ID, gsvc.statusMsg.ChannelID
-	// }
-	// gsvc.mu.RUnlock()
-	if react.MessageID == statusMsgID && react.ChannelID == statusMsgChID {
-		switch react.Emoji.Name {
-		case pauseCmdEmoji:
-			// pause.run(nil, gsvc, nil)
-		case skipCmdEmoji:
-			// skip.run(nil, gsvc, nil)
-		}
+	channel, err := session.State.Channel(react.ChannelID)
+	if err != nil {
+		return
 	}
+
+	message, err := session.State.Message(react.ChannelID, react.MessageID)
+	if err != nil {
+		return
+	}
+
+	req := GuildRequest{
+		Channel: channel,
+		Message: message,
+	}
+	// TODO
+	_ = req
 }

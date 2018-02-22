@@ -2,10 +2,8 @@ package music
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
@@ -81,14 +79,6 @@ func (b *Bot) Stop() {
 	b.mu.Unlock()
 }
 
-func (b *Bot) addGuild(g *discordgo.Guild) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	gh := b.guildServices[g.ID]
-	gh.Close()
-	b.guildServices[g.ID] = Guild(b.session, g, b.db)
-}
-
 func detectMusicChannel(g *discordgo.Guild) string {
 	for _, ch := range g.Channels {
 		if ch.Type == discordgo.ChannelTypeGuildVoice && strings.HasPrefix(strings.ToLower(ch.Name), defaultMusicChannelPrefix) {
@@ -96,16 +86,6 @@ func detectMusicChannel(g *discordgo.Guild) string {
 		}
 	}
 	return ""
-}
-
-func prettyTime(t time.Duration) string {
-	hours := int(t.Hours())
-	min := int(t.Minutes()) % 60
-	sec := int(t.Seconds()) % 60
-	if hours >= 1 {
-		return fmt.Sprintf("%02v:%02v:%02v", hours, min, sec)
-	}
-	return fmt.Sprintf("%02v:%02v", min, sec)
 }
 
 type boltGuildStorage struct {

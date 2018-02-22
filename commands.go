@@ -13,8 +13,6 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
-var ErrGuildCmd = errors.New("call this command in a guild")
-
 type command struct {
 	name            string
 	alias           []string
@@ -24,17 +22,16 @@ type command struct {
 	ownerOnly       bool
 	restrictChannel bool
 	ack             string // must be an emoji, used to react on success
+	shortcut        string // must be an emoji, users can react to the status message to invoke this command
 	run             func(*guildService, GuildRequest, []string) error
 }
 
-// TODO help references commands slice -> initialization loop
-// review use of global slice :/
-var commands []*command
-
-// nil if none matching
-func parseCommand(args []string) (*command, []string) {
+// determine which command to run and with what arguments.
+// bool return will be false for no matching command, like with accessing maps
+// e.g. cmd, args, ok := parseCommand(argv)
+func parseCommand(args []string) (command, []string, bool) {
 	if len(args) == 0 {
-		return nil, args
+		return command{}, args, false
 	}
 	// if arg[0] resembles a url try the domain as a command name/alias and args are arg[0:]
 	// else try arg[0] is a command name/alias and args are arg[1:]
@@ -42,17 +39,17 @@ func parseCommand(args []string) (*command, []string) {
 	if strings.HasPrefix(args[0], "http") {
 		if u, err := url.Parse(args[0]); err == nil {
 			candidateCmd = strings.ToLower(domainFrom(u.Hostname()))
-			if cmd := commandByNameOrAlias(candidateCmd); cmd != nil {
-				return cmd, args
+			if cmd, ok := commandByNameOrAlias(candidateCmd); ok {
+				return cmd, args, true
 			}
 		}
 	}
 	candidateCmd = strings.ToLower(args[0])
-	if cmd := commandByNameOrAlias(candidateCmd); cmd != nil {
-		return cmd, args[1:]
+	if cmd, ok := commandByNameOrAlias(candidateCmd); ok {
+		return cmd, args[1:], true
 	}
 	// TODO if still none try to see if streamlink will handle the url and synthesize a command
-	return nil, args
+	return command{}, args, false
 }
 
 // get "example" in example, example., example.com, www.example.com, www.system.example.com
@@ -64,21 +61,21 @@ func domainFrom(hostname string) string {
 	return parts[len(parts)-2]
 }
 
-func commandByNameOrAlias(candidate string) *command {
+func commandByNameOrAlias(candidate string) (command, bool) {
 	for _, cmd := range commands {
 		if candidate == cmd.name {
-			return cmd
+			return cmd, true
 		}
 		for _, alias := range cmd.alias {
 			if candidate == alias {
-				return cmd
+				return cmd, true
 			}
 		}
 	}
-	return nil
+	return command{}, false
 }
 
-func helpWithCommand(cmd *command) *discordgo.MessageEmbed {
+func helpForCommand(cmd command) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{}
 	embed.Title = cmd.name
 	embed.Fields = []*discordgo.MessageEmbedField{
@@ -107,22 +104,28 @@ func helpWithCommand(cmd *command) *discordgo.MessageEmbed {
 	return embed
 }
 
-// var commands = []*command{
-// 	&help,
-// 	&youtube,
-// 	&soundcloud,
-// 	&twitch,
-// 	&bandcamp,
-// 	&skip,
-// 	&pause,
-// 	&clear,
-// 	&reconnect,
-// 	// setPrefix,
-// 	&setListen,
-// 	&unsetListen,
-// }
+var commands []command
 
-func helpWithCommandList(commands []*command) *discordgo.MessageEmbed {
+// avoid initialization loop since help command refers to this list
+func init() {
+	commands = []command{
+		help,
+		youtube,
+		soundcloud,
+		twitch,
+		bandcamp,
+		pause,
+		skip,
+		clear,
+		reconnect,
+		get,
+		set,
+		setListen,
+		unsetListen,
+	}
+}
+
+func helpForCommandList(commands []command) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{}
 	embed.Title = "help"
 	embed.Description = "Command can be inferred from a url if the url's domain is a command name or alias."
@@ -170,14 +173,14 @@ var help = command{
 		}
 
 		if len(args) > 0 && args[0] != "" {
-			if cmd := commandByNameOrAlias(args[0]); cmd != nil {
-				embed := helpWithCommand(cmd)
+			if cmd, ok := commandByNameOrAlias(args[0]); ok {
+				embed := helpForCommand(cmd)
 				_, err = gsvc.session.ChannelMessageSendEmbed(dm.ID, embed)
 				return err
 			}
 		}
 
-		embed := helpWithCommandList(commands)
+		embed := helpForCommandList(commands)
 		_, err = gsvc.session.ChannelMessageSendEmbed(dm.ID, embed)
 		return err
 	},
@@ -254,6 +257,7 @@ var skip = command{
 	name:            "skip",
 	usage:           "skip",
 	restrictChannel: true,
+	shortcut:        "⏭",
 	run: func(gsvc *guildService, req GuildRequest, args []string) error {
 		gsvc.player.Skip()
 		return nil
@@ -265,6 +269,7 @@ var pause = command{
 	alias:           []string{"p"},
 	usage:           "pause",
 	restrictChannel: true,
+	shortcut:        "⏯",
 	run: func(gsvc *guildService, req GuildRequest, args []string) error {
 		gsvc.player.Pause()
 		return nil
