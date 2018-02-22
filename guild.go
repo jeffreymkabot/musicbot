@@ -11,6 +11,28 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
+type guildClient interface {
+	send(guildRequest)
+	close()
+}
+
+type syncGuildClient struct {
+	ch chan<- guildRequest
+	wg sync.WaitGroup
+}
+
+func (gh syncGuildClient) send(req guildRequest) {
+	gh.ch <- req
+}
+
+func (gh *syncGuildClient) close() {
+	if gh.ch != nil {
+		close(gh.ch)
+		gh.ch = nil
+		gh.wg.Wait()
+	}
+}
+
 type guildService struct {
 	guildInfo
 	guildID   string
@@ -18,12 +40,11 @@ type guildService struct {
 	session   *discordgo.Session
 	statusMsg *discordgo.Message
 	player    *dcv.Player
-	wg        sync.WaitGroup
 }
 
 type guildStorage interface {
-	Read(guildID string, info *guildInfo) error
-	Write(guildID string, info guildInfo) error
+	read(guildID string, info *guildInfo) error
+	write(guildID string, info guildInfo) error
 }
 
 type guildInfo struct {
@@ -49,14 +70,14 @@ type guildRequest struct {
 	callback func(err error)
 }
 
-func newGuild(session *discordgo.Session, guild *discordgo.Guild, store guildStorage) chan<- guildRequest {
+func newGuild(session *discordgo.Session, guild *discordgo.Guild, store guildStorage) guildClient {
 	gsvc := guildService{
 		guildID: guild.ID,
 		store:   store,
 		session: session,
 	}
 
-	if err := store.Read(guild.ID, &gsvc.guildInfo); err != nil {
+	if err := store.read(guild.ID, &gsvc.guildInfo); err != nil {
 		gsvc.guildInfo = defaultGuildInfo
 		gsvc.MusicChannel = detectMusicChannel(guild)
 	}
@@ -74,16 +95,17 @@ func newGuild(session *discordgo.Session, guild *discordgo.Guild, store guildSto
 	)
 
 	ch := make(chan guildRequest)
-	go guildManager(gsvc, ch)
-	return ch
-}
-
-func guildManager(gsvc guildService, ch <-chan guildRequest) {
-	for request := range ch {
-		gsvc.handle(request)
-	}
-	// channel closed, cleanup etc
-	gsvc.close()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		for request := range ch {
+			gsvc.handle(request)
+		}
+		// chan closed
+		gsvc.player.Quit()
+		wg.Done()
+	}()
+	return &syncGuildClient{ch, wg}
 }
 
 func (gsvc *guildService) handle(req guildRequest) {
@@ -139,18 +161,12 @@ func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID 
 }
 
 func (gsvc *guildService) save() error {
-	return gsvc.store.Write(gsvc.guildID, gsvc.guildInfo)
+	return gsvc.store.write(gsvc.guildID, gsvc.guildInfo)
 }
 
 func (gsvc *guildService) reconnect() {
 	gsvc.player.Quit()
 	// TODO
-}
-
-func (gsvc *guildService) close() {
-	gsvc.player.Quit()
-	// wait for status messages to be deleted
-	gsvc.wg.Wait()
 }
 
 func contains(s []string, t string) bool {

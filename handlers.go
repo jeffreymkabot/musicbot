@@ -81,8 +81,8 @@ func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chann
 			}
 		},
 	}
-	if ch := b.guildHandlers[channel.GuildID]; ch != nil {
-		ch <- req
+	if gh := b.guildClients[channel.GuildID]; gh != nil {
+		gh.send(req)
 	}
 	return
 }

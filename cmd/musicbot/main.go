@@ -32,7 +32,7 @@ func main() {
 
 	log.Printf("Using config %#v", cfg)
 
-	bot, err := music.New(cfg.Token, cfg.Bolt, cfg.Owner, music.Loudness(cfg.Loudness), music.Soundcloud(cfg.Soundcloud))
+	bot, err := music.New(cfg.Token, cfg.Bolt, cfg.Owner)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}

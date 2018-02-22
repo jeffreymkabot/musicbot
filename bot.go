@@ -25,15 +25,15 @@ func Soundcloud(clientID string) {
 }
 
 type Bot struct {
-	mu            sync.RWMutex
-	session       *discordgo.Session
-	db            *boltGuildStorage
-	owner         string
-	soundcloud    string
-	loudness      float64
-	me            *discordgo.User
-	guilds        map[string]*guildService
-	guildHandlers map[string](chan<- guildRequest)
+	mu           sync.RWMutex
+	session      *discordgo.Session
+	db           *boltGuildStorage
+	owner        string
+	soundcloud   string
+	loudness     float64
+	me           *discordgo.User
+	guilds       map[string]*guildService
+	guildClients map[string]guildClient
 }
 
 func New(token string, dbPath string, owner string) (*Bot, error) {
@@ -48,11 +48,11 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 	}
 	session.LogLevel = discordgo.LogWarning
 	b := &Bot{
-		session:       session,
-		db:            db,
-		owner:         owner,
-		guilds:        make(map[string]*guildService),
-		guildHandlers: make(map[string]chan<- guildRequest),
+		session:      session,
+		db:           db,
+		owner:        owner,
+		guilds:       make(map[string]*guildService),
+		guildClients: make(map[string]guildClient),
 	}
 
 	session.AddHandler(onGuildCreate(b))
@@ -80,8 +80,8 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 
 func (b *Bot) Stop() {
 	b.mu.Lock()
-	for _, gsvc := range b.guilds {
-		gsvc.close()
+	for _, gh := range b.guildClients {
+		gh.close()
 	}
 	b.session.Close()
 	b.db.Close()
@@ -125,7 +125,7 @@ func (b *Bot) enqueue(gsvc *guildService, pl plugins.Plugin, url string, statusC
 			gsvc.statusMsg = msg
 			// gsvc.mu.Unlock()
 			// gsvc.close() will wait until the message is deleted in the OnEnd callback
-			gsvc.wg.Add(1)
+			// gsvc.wg.Add(1)
 			b.session.MessageReactionAdd(statusChannelID, msg.ID, pauseCmdEmoji)
 			b.session.MessageReactionAdd(statusChannelID, msg.ID, skipCmdEmoji)
 		}
@@ -171,7 +171,7 @@ func (b *Bot) enqueue(gsvc *guildService, pl plugins.Plugin, url string, statusC
 				// gsvc.mu.Lock()
 				gsvc.statusMsg = nil
 				// gsvc.mu.Unlock()
-				gsvc.wg.Done()
+				// gsvc.wg.Done()
 			}
 		}),
 	)
@@ -214,12 +214,9 @@ func stats(data []float64) (avg float64, dev float64, max float64, min float64) 
 func (b *Bot) addGuild(g *discordgo.Guild) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	ch := b.guildHandlers[g.ID]
-	if ch != nil {
-		close(ch)
-		// TODO should wait for service to close
-	}
-	b.guildHandlers[g.ID] = newGuild(b.session, g, b.db) // TODO impl guildStorage
+	gh := b.guildClients[g.ID]
+	gh.close()
+	b.guildClients[g.ID] = newGuild(b.session, g, b.db)
 }
 
 func detectMusicChannel(g *discordgo.Guild) string {
@@ -260,7 +257,7 @@ func newBoltGuildStorage(dbPath string) (*boltGuildStorage, error) {
 	return &boltGuildStorage{db}, nil
 }
 
-func (db boltGuildStorage) Read(guildID string, info *guildInfo) error {
+func (db boltGuildStorage) read(guildID string, info *guildInfo) error {
 	return db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("guilds"))
 		val := bucket.Get([]byte(guildID))
@@ -271,7 +268,7 @@ func (db boltGuildStorage) Read(guildID string, info *guildInfo) error {
 	})
 }
 
-func (db boltGuildStorage) Write(guildID string, info guildInfo) error {
+func (db boltGuildStorage) write(guildID string, info guildInfo) error {
 	return db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("guilds"))
 		val, err := json.Marshal(info)
