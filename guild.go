@@ -208,18 +208,20 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 	}
 }
 
-func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID string) error {
+func (gsvc *guildService) enqueue(evt GuildEvent, p plugins.Plugin, arg string) error {
 	musicChannelID := gsvc.MusicChannel
 	if musicChannelID == "" {
 		return errors.New("no music channel set up")
 	}
 
+	gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
+	defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
 	md, err := p.Resolve(arg)
 	if err != nil {
 		return err
 	}
 
-	statusMessageID := ""
+	statusChannelID, statusMessageID := evt.Channel.ID, ""
 	embed := &discordgo.MessageEmbed{}
 	embed.Color = 0xa680ee
 	embed.Footer = &discordgo.MessageEmbedFooter{}

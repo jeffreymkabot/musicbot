@@ -107,7 +107,7 @@ var youtube = command{
 		if len(args) == 0 {
 			return errors.New("video please")
 		}
-		return gsvc.enqueue(plugins.Youtube{}, args[0], evt.Channel.ID)
+		return gsvc.enqueue(evt, plugins.Youtube{}, args[0])
 	},
 }
 
@@ -121,7 +121,7 @@ var soundcloud = command{
 		if len(args) == 0 {
 			return errors.New("track please")
 		}
-		return gsvc.enqueue(plugins.Soundcloud{gsvc.soundcloud}, args[0], evt.Channel.ID)
+		return gsvc.enqueue(evt, plugins.Soundcloud{gsvc.soundcloud}, args[0])
 	},
 }
 
@@ -135,7 +135,7 @@ var bandcamp = command{
 		if len(args) == 0 {
 			return errors.New("track please")
 		}
-		return gsvc.enqueue(plugins.Bandcamp{}, args[0], evt.Channel.ID)
+		return gsvc.enqueue(evt, plugins.Bandcamp{}, args[0])
 	},
 }
 
@@ -148,7 +148,7 @@ var twitch = command{
 		if len(args) == 0 {
 			return errors.New("channel please")
 		}
-		return gsvc.enqueue(plugins.Twitch{}, args[0], evt.Channel.ID)
+		return gsvc.enqueue(evt, plugins.Twitch{}, args[0])
 	},
 }
 
