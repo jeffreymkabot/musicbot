@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 
@@ -23,7 +24,7 @@ type command struct {
 	restrictChannel bool
 	ack             string // must be an emoji, used to react on success
 	shortcut        string // must be an emoji, users can react to the status message to invoke this command
-	run             func(*guildService, GuildRequest, []string) error
+	run             func(*guildService, GuildEvent, []string) error
 }
 
 // determine which command to run and with what arguments.
@@ -75,6 +76,255 @@ func commandByNameOrAlias(candidate string) (command, bool) {
 	return command{}, false
 }
 
+var commands []command
+
+// avoid initialization loop since help command refers to this list
+func init() {
+	commands = []command{
+		help,
+		youtube,
+		soundcloud,
+		twitch,
+		bandcamp,
+		pause,
+		skip,
+		clear,
+		reconnect,
+		get,
+		set,
+		setListen,
+		unsetListen,
+	}
+}
+
+var youtube = command{
+	name:            "youtube",
+	alias:           []string{"yt", "youtu"},
+	usage:           "youtube [url]",
+	restrictChannel: true,
+	ack:             "☑",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		if len(args) == 0 {
+			return errors.New("video please")
+		}
+		return gsvc.enqueue(plugins.Youtube{}, args[0], evt.Channel.ID)
+	},
+}
+
+var soundcloud = command{
+	name:            "soundcloud",
+	alias:           []string{"sc", "snd"},
+	usage:           "soundcloud [url]",
+	restrictChannel: true,
+	ack:             "☑",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		if len(args) == 0 {
+			return errors.New("track please")
+		}
+		return gsvc.enqueue(plugins.Soundcloud{gsvc.soundcloud}, args[0], evt.Channel.ID)
+	},
+}
+
+var bandcamp = command{
+	name:            "bandcamp",
+	alias:           []string{"bc"},
+	usage:           "bandcamp [url]",
+	restrictChannel: true,
+	ack:             "☑",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		if len(args) == 0 {
+			return errors.New("track please")
+		}
+		return gsvc.enqueue(plugins.Bandcamp{}, args[0], evt.Channel.ID)
+	},
+}
+
+var twitch = command{
+	name:            "twitch",
+	usage:           "twitch [url]",
+	restrictChannel: true,
+	ack:             "☑",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		if len(args) == 0 {
+			return errors.New("channel please")
+		}
+		return gsvc.enqueue(plugins.Twitch{}, args[0], evt.Channel.ID)
+	},
+}
+
+var reconnect = command{
+	name:            "reconnect",
+	usage:           "reconnect",
+	restrictChannel: true,
+	ack:             "🆗",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		gsvc.reconnect()
+		return nil
+	},
+}
+
+var skip = command{
+	name:            "skip",
+	usage:           "skip",
+	restrictChannel: true,
+	shortcut:        "⏭",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		gsvc.player.Skip()
+		return nil
+	},
+}
+
+var pause = command{
+	name:            "pause",
+	alias:           []string{"p"},
+	usage:           "pause",
+	restrictChannel: true,
+	shortcut:        "⏯",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		gsvc.player.Pause()
+		return nil
+	},
+}
+
+var clear = command{
+	name:            "clear",
+	alias:           []string{"cl"},
+	usage:           "clear",
+	restrictChannel: true,
+	ack:             "🔘",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		gsvc.player.Clear()
+		return nil
+	},
+}
+
+var get = command{
+	name:  "get",
+	usage: "get [field]",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		if len(args) == 0 {
+			return errors.New("field please")
+		}
+		fieldRe, err := regexp.Compile("(?i)" + args[0])
+		if err != nil {
+			return err
+		}
+		info := reflect.ValueOf(&gsvc.GuildInfo).Elem()
+		infoType := info.Type()
+		var fields []struct {
+			name string
+			val  interface{}
+		}
+		for i := 0; i < infoType.NumField(); i++ {
+			fldName := infoType.Field(i).Name
+			if fieldRe.MatchString(fldName) {
+				val := info.Field(i).Interface()
+				fields = append(fields, struct {
+					name string
+					val  interface{}
+				}{fldName, val})
+			}
+		}
+		if len(fields) == 0 {
+			return errors.New("field not found")
+		}
+		buf := &bytes.Buffer{}
+		for _, fld := range fields {
+			fmt.Fprintf(buf, "`%v: %v`\n", fld.name, fld.val)
+		}
+		gsvc.discord.ChannelMessageSend(evt.Channel.ID, buf.String())
+		return nil
+	},
+}
+
+var set = command{
+	name:  "set",
+	usage: "set [field] [value]",
+	ack:   "🆗",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		if len(args) < 2 {
+			return errors.New("field and value please")
+		}
+		info := reflect.ValueOf(&gsvc.GuildInfo).Elem()
+		infoType := info.Type()
+		for i := 0; i < infoType.NumField(); i++ {
+			fldName := infoType.Field(i).Name
+			fldType := infoType.Field(i).Type.Kind()
+			// TODO support non string fields e.g. loudness is a float64
+			if fldType == reflect.String && strings.ToLower(fldName) == strings.ToLower(args[0]) {
+				info.Field(i).SetString(args[1])
+				gsvc.save()
+				return nil
+			}
+		}
+		return errors.New("settable field not found")
+	},
+}
+
+var setListen = command{
+	name:  "whitelist",
+	usage: "whitelist",
+	ack:   "🆗",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		textChannelID := evt.Channel.ID
+		if textChannelID == "" {
+			return errors.New("channel please")
+		}
+		if !contains(gsvc.ListenChannels, textChannelID) {
+			gsvc.ListenChannels = append(gsvc.ListenChannels, textChannelID)
+		}
+		return gsvc.save()
+	},
+}
+
+var unsetListen = command{
+	name:  "unwhitelist",
+	usage: "unwhitelist",
+	ack:   "🆗",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		textChannelID := evt.Channel.ID
+		if textChannelID == "" {
+			return errors.New("channel please")
+		}
+		for i, ch := range gsvc.ListenChannels {
+			if ch == textChannelID {
+				gsvc.ListenChannels = append(gsvc.ListenChannels[:i], gsvc.ListenChannels[i+1:]...)
+			}
+		}
+		return gsvc.save()
+	},
+}
+
+var help = command{
+	name:  "help",
+	alias: []string{"h"},
+	usage: "help [command name]",
+	ack:   "📬",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		// help gets whispered to the user
+		dmChannelID := ""
+		if evt.Channel.Type == discordgo.ChannelTypeDM || evt.Channel.Type == discordgo.ChannelTypeGroupDM {
+			dmChannelID = evt.Channel.ID
+		} else if channel, err := gsvc.discord.UserChannelCreate(evt.Message.Author.ID); err == nil {
+			dmChannelID = channel.ID
+		} else {
+			return err
+		}
+
+		if len(args) > 0 && args[0] != "" {
+			if cmd, ok := commandByNameOrAlias(args[0]); ok {
+				embed := helpForCommand(cmd)
+				_, err := gsvc.discord.ChannelMessageSendEmbed(dmChannelID, embed)
+				return err
+			}
+		}
+
+		embed := helpForCommandList(commands)
+		_, err := gsvc.discord.ChannelMessageSendEmbed(dmChannelID, embed)
+		return err
+	},
+}
+
 func helpForCommand(cmd command) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{}
 	embed.Title = cmd.name
@@ -102,27 +352,6 @@ func helpForCommand(cmd command) *discordgo.MessageEmbed {
 		}
 	}
 	return embed
-}
-
-var commands []command
-
-// avoid initialization loop since help command refers to this list
-func init() {
-	commands = []command{
-		help,
-		youtube,
-		soundcloud,
-		twitch,
-		bandcamp,
-		pause,
-		skip,
-		clear,
-		reconnect,
-		get,
-		set,
-		setListen,
-		unsetListen,
-	}
 }
 
 func helpForCommandList(commands []command) *discordgo.MessageEmbed {
@@ -155,214 +384,4 @@ func helpForCommandList(commands []command) *discordgo.MessageEmbed {
 		Text: "Commands with a * will only run in whitelisted channels.",
 	}
 	return embed
-}
-
-var help = command{
-	name:  "help",
-	alias: []string{"h"},
-	usage: "help [command name]",
-	ack:   "📬",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		// help gets whispered to the user
-		var dm *discordgo.Channel
-		var err error
-		if req.Channel.Type == discordgo.ChannelTypeDM || req.Channel.Type == discordgo.ChannelTypeGroupDM {
-			dm = req.Channel
-		} else if dm, err = gsvc.session.UserChannelCreate(req.Message.Author.ID); err != nil {
-			return err
-		}
-
-		if len(args) > 0 && args[0] != "" {
-			if cmd, ok := commandByNameOrAlias(args[0]); ok {
-				embed := helpForCommand(cmd)
-				_, err = gsvc.session.ChannelMessageSendEmbed(dm.ID, embed)
-				return err
-			}
-		}
-
-		embed := helpForCommandList(commands)
-		_, err = gsvc.session.ChannelMessageSendEmbed(dm.ID, embed)
-		return err
-	},
-}
-
-var reconnect = command{
-	name:            "reconnect",
-	usage:           "reconnect",
-	restrictChannel: true,
-	ack:             "🆗",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		gsvc.reconnect()
-		return nil
-	},
-}
-
-var youtube = command{
-	name:            "youtube",
-	alias:           []string{"yt", "youtu"},
-	usage:           "youtube [url]",
-	restrictChannel: true,
-	ack:             "☑",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		if len(args) == 0 {
-			return errors.New("video please")
-		}
-		return gsvc.enqueue(plugins.Youtube{}, args[0], req.Channel.ID)
-	},
-}
-
-var soundcloud = command{
-	name:            "soundcloud",
-	alias:           []string{"sc", "snd"},
-	usage:           "soundcloud [url]",
-	restrictChannel: true,
-	ack:             "☑",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		if len(args) == 0 {
-			return errors.New("track please")
-		}
-		// TODO soundcloud client id
-		return gsvc.enqueue(plugins.Soundcloud{ClientID: ""}, args[0], req.Channel.ID)
-	},
-}
-
-var bandcamp = command{
-	name:            "bandcamp",
-	alias:           []string{"bc"},
-	usage:           "bandcamp [url]",
-	restrictChannel: true,
-	ack:             "☑",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		if len(args) == 0 {
-			return errors.New("track please")
-		}
-		return gsvc.enqueue(plugins.Bandcamp{}, args[0], req.Channel.ID)
-	},
-}
-
-var twitch = command{
-	name:            "twitch",
-	usage:           "twitch [url]",
-	restrictChannel: true,
-	ack:             "☑",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		if len(args) == 0 {
-			return errors.New("channel please")
-		}
-		return gsvc.enqueue(plugins.Twitch{}, args[0], req.Channel.ID)
-	},
-}
-
-var skip = command{
-	name:            "skip",
-	usage:           "skip",
-	restrictChannel: true,
-	shortcut:        "⏭",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		gsvc.player.Skip()
-		return nil
-	},
-}
-
-var pause = command{
-	name:            "pause",
-	alias:           []string{"p"},
-	usage:           "pause",
-	restrictChannel: true,
-	shortcut:        "⏯",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		gsvc.player.Pause()
-		return nil
-	},
-}
-
-var clear = command{
-	name:            "clear",
-	alias:           []string{"cl"},
-	usage:           "clear",
-	restrictChannel: true,
-	ack:             "🔘",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		gsvc.player.Clear()
-		return nil
-	},
-}
-
-var get = command{
-	name:  "get",
-	usage: "get [field]",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		if len(args) == 0 {
-			return errors.New("field please")
-		}
-		info := reflect.ValueOf(&gsvc.GuildInfo).Elem()
-		infoType := info.Type()
-		for i := 0; i < infoType.NumField(); i++ {
-			fldName := infoType.Field(i).Name
-			if strings.ToLower(fldName) == strings.ToLower(args[0]) {
-				val := info.Field(i).Interface()
-				gsvc.session.ChannelMessageSend(req.Channel.ID, fmt.Sprintf("`%v: %v`", fldName, val))
-				return nil
-			}
-		}
-		return errors.New("field not found")
-	},
-}
-
-var set = command{
-	name:  "set",
-	usage: "set [field] [value]",
-	ack:   "🆗",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		if len(args) < 2 {
-			return errors.New("field and value please")
-		}
-		info := reflect.ValueOf(&gsvc.GuildInfo).Elem()
-		infoType := info.Type()
-		for i := 0; i < infoType.NumField(); i++ {
-			fldName := infoType.Field(i).Name
-			fldType := infoType.Field(i).Type.Kind()
-			// TODO support non string fields e.g. loudness is a float64
-			if fldType == reflect.String && strings.ToLower(fldName) == strings.ToLower(args[0]) {
-				info.Field(i).SetString(args[1])
-				gsvc.save()
-				return nil
-			}
-		}
-		return errors.New("settable field not found")
-	},
-}
-
-var setListen = command{
-	name:  "whitelist",
-	usage: "whitelist",
-	ack:   "🆗",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		textChannelID := req.Channel.ID
-		if textChannelID == "" {
-			return errors.New("channel please")
-		}
-		if !contains(gsvc.ListenChannels, textChannelID) {
-			gsvc.ListenChannels = append(gsvc.ListenChannels, textChannelID)
-		}
-		return gsvc.save()
-	},
-}
-
-var unsetListen = command{
-	name:  "unwhitelist",
-	usage: "unwhitelist",
-	ack:   "🆗",
-	run: func(gsvc *guildService, req GuildRequest, args []string) error {
-		textChannelID := req.Channel.ID
-		if textChannelID == "" {
-			return errors.New("channel please")
-		}
-		for i, ch := range gsvc.ListenChannels {
-			if ch == textChannelID {
-				gsvc.ListenChannels = append(gsvc.ListenChannels[:i], gsvc.ListenChannels[i+1:]...)
-			}
-		}
-		return gsvc.save()
-	},
 }

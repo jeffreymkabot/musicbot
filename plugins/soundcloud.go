@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-var endpointSc = "http://api.soundcloud.com/"
-var endpointScResolve = endpointSc + "resolve/"
+const endpointSc = "http://api.soundcloud.com/"
+const endpointScResolve = endpointSc + "resolve/"
 
 type Soundcloud struct {
 	ClientID string

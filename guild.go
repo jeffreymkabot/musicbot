@@ -14,29 +14,45 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
-var ErrGuildClientTimeout = errors.New("request timeout")
-var ErrGuildClientClosed = errors.New("client is disposed")
+var ErrGuildServiceTimeout = errors.New("service timed out")
+var ErrGuildServiceClosed = errors.New("service is disposed")
 
-// GuildService handles incoming GuildRequests.
+// GuildService handles incoming GuildEvents.
 // Close is idempotent.
 type GuildService interface {
-	Send(GuildRequest) error
+	Send(GuildEvent) error
 	Close()
 }
 
-type syncGuildService struct {
-	ch     chan<- GuildRequest
-	wg     sync.WaitGroup
-	closed chan struct{}
+// GuildEvent provides instructions to a GuildService.
+type GuildEvent struct {
+	Type    GuildEventType
+	Channel discordgo.Channel
+	Message discordgo.Message
+	Author  discordgo.User
+	Body    string
 }
 
-func (svc *syncGuildService) Send(req GuildRequest) error {
+type GuildEventType int
+
+const (
+	MessageEvent GuildEventType = iota
+	ReactEvent
+)
+
+type syncGuildService struct {
+	eventChan chan<- GuildEvent
+	wg        sync.WaitGroup
+	closed    chan struct{}
+}
+
+func (svc *syncGuildService) Send(evt GuildEvent) error {
 	select {
-	case svc.ch <- req:
+	case svc.eventChan <- evt:
 	case <-svc.closed:
-		return ErrGuildClientClosed
+		return ErrGuildServiceClosed
 	case <-time.After(1 * time.Second):
-		return ErrGuildClientTimeout
+		return ErrGuildServiceTimeout
 	}
 	return nil
 }
@@ -46,7 +62,7 @@ func (svc *syncGuildService) Close() {
 	case <-svc.closed:
 	default:
 		close(svc.closed)
-		close(svc.ch)
+		close(svc.eventChan)
 		svc.wg.Wait()
 	}
 }
@@ -55,9 +71,11 @@ type guildService struct {
 	syncGuildService
 	GuildInfo
 	guildID string
-	store   GuildStorage
-	session *discordgo.Session
-	player  *dcv.Player
+	// TODO soundcloud client id
+	soundcloud string
+	store      GuildStorage
+	discord    *discordgo.Session
+	player     *dcv.Player
 	// TODO how to manage statusMessage state in a reasonable way without mutex?
 	mu                  sync.Mutex
 	playerStatusMessage *discordgo.Message
@@ -85,30 +103,13 @@ var defaultGuildInfo = GuildInfo{
 	Prefix: defaultCommandPrefix,
 }
 
-// GuildRequest provides instructions to a GuildService.
-// TODO would it help code organization to make this an interface ?
-type GuildRequest struct {
-	Type     GuildRequestType
-	Channel  *discordgo.Channel
-	Message  *discordgo.Message
-	Body     string
-	Callback func(err error)
-}
-
-type GuildRequestType int
-
-const (
-	MessageRequest GuildRequestType = iota
-	ReactRequest
-)
-
 // Guild creates a new GuildService.
 // The service returned is safe to use in multiple threads.
 func Guild(session *discordgo.Session, guild *discordgo.Guild, store GuildStorage) GuildService {
 	gsvc := guildService{
 		guildID: guild.ID,
 		store:   store,
-		session: session,
+		discord: session,
 	}
 
 	if err := store.Read(guild.ID, &gsvc.GuildInfo); err != nil {
@@ -128,70 +129,79 @@ func Guild(session *discordgo.Session, guild *discordgo.Guild, store GuildStorag
 		dcv.QueueLength(10),
 	)
 
-	requestChan := make(chan GuildRequest)
+	eventChan := make(chan GuildEvent)
 	gsvc.syncGuildService = syncGuildService{
-		ch:     requestChan,
-		wg:     sync.WaitGroup{},
-		closed: make(chan struct{}),
+		eventChan: eventChan,
+		wg:        sync.WaitGroup{},
+		closed:    make(chan struct{}),
 	}
 
 	gsvc.wg.Add(1)
 	go func() {
-		for req := range requestChan {
-			switch req.Type {
-			case MessageRequest:
-				gsvc.handleMessageRequest(req)
-			case ReactRequest:
-				gsvc.handleReactionRequest(req)
+		for evt := range eventChan {
+			switch evt.Type {
+			case MessageEvent:
+				gsvc.handleMessageEvent(evt)
+			case ReactEvent:
+				gsvc.handleReactionEvent(evt)
 			}
 		}
 		gsvc.player.Quit()
+		gsvc.save()
 		gsvc.wg.Done()
 	}()
 
 	return &gsvc
 }
 
-// act only on messages beginning with the appropriate prefix in the appropriate channel by an appropriate user
-func (gsvc *guildService) handleMessageRequest(req GuildRequest) {
-	if !strings.HasPrefix(req.Body, gsvc.Prefix) && !strings.HasPrefix(req.Body, defaultCommandPrefix) {
+// act only on messages beginning with an appropriate prefix in an appropriate channel by an appropriate user
+func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
+	prefix := ""
+	if strings.HasPrefix(evt.Body, gsvc.Prefix) {
+		prefix = gsvc.Prefix
+	} else if strings.HasPrefix(evt.Body, defaultCommandPrefix) {
+		prefix = defaultCommandPrefix
+	} else {
 		return
 	}
 
-	args := strings.Fields(strings.TrimPrefix(req.Body, gsvc.Prefix))
+	args := strings.Fields(strings.TrimPrefix(evt.Body, prefix))
 	cmd, args, ok := parseCommand(args)
 	if !ok {
 		return
 	}
 
-	if cmd.restrictChannel && !contains(gsvc.ListenChannels, req.Channel.ID) {
-		log.Printf("command %s invoked in unregistered channel %s", cmd.name, req.Channel.ID)
+	if cmd.restrictChannel && !contains(gsvc.ListenChannels, evt.Channel.ID) {
+		log.Printf("command %s invoked in unregistered channel %s", cmd.name, evt.Channel.ID)
 		return
 	}
 
-	if cmd.ownerOnly && !isOwner(req.Message.Author.ID) {
-		log.Printf("user %s not allowed to execute command %s", req.Message.Author.ID, cmd.name)
+	if cmd.ownerOnly && !isOwner(evt.Message.Author.ID) {
+		log.Printf("user %s not allowed to execute command %s", evt.Message.Author.ID, cmd.name)
 		return
 	}
 
-	err := cmd.run(gsvc, req, args)
-	if err == nil && cmd.ack != "" {
-		gsvc.session.MessageReactionAdd(req.Channel.ID, req.Message.ID, cmd.ack)
+	err := cmd.run(gsvc, evt, args)
+	// write error response or react with success ack
+	if err != nil {
+		gsvc.discord.ChannelMessageSend(evt.Channel.ID, fmt.Sprintf("🤔...\n%v", err))
+		return
 	}
-	if req.Callback != nil {
-		req.Callback(err)
+	if cmd.ack != "" {
+		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, cmd.ack)
 	}
 }
 
 // act only on reactions placed on the status message
-func (gsvc *guildService) handleReactionRequest(req GuildRequest) {
+func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 	gsvc.mu.Lock()
-	statusChannelID, statusMessageID := gsvc.playerStatusMessage.ID, gsvc.playerStatusMessage.ChannelID
+	statusChannelID, statusMessageID := gsvc.playerStatusMessage.ChannelID, gsvc.playerStatusMessage.ID
 	gsvc.mu.Unlock()
-	if req.Channel.ID == statusChannelID && req.Message.ID == statusMessageID {
+	if evt.Channel.ID == statusChannelID && evt.Message.ID == statusMessageID {
 		for _, cmd := range commands {
-			if cmd.shortcut == req.Body {
-				cmd.run(gsvc, req, nil)
+			// no viable vector for send error response or success ack
+			if cmd.shortcut == evt.Body {
+				cmd.run(gsvc, evt, nil)
 				return
 			}
 		}
@@ -225,9 +235,9 @@ func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID 
 		}
 
 		if statusMessageID == "" {
-			msg, err := gsvc.session.ChannelMessageSendEmbed(statusChannelID, embed)
+			msg, err := gsvc.discord.ChannelMessageSendEmbed(statusChannelID, embed)
 			if err != nil {
-				log.Printf("failed to display player status", err)
+				log.Printf("failed to display player status %v", err)
 				return
 			}
 			statusMessageID = msg.ID
@@ -241,13 +251,13 @@ func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID 
 
 			for _, cmd := range commands {
 				if cmd.shortcut != "" {
-					gsvc.session.MessageReactionAdd(statusChannelID, statusMessageID, cmd.shortcut)
+					gsvc.discord.MessageReactionAdd(statusChannelID, statusMessageID, cmd.shortcut)
 				}
 			}
 		} else {
-			_, err := gsvc.session.ChannelMessageEditEmbed(statusChannelID, statusMessageID, embed)
+			_, err := gsvc.discord.ChannelMessageEditEmbed(statusChannelID, statusMessageID, embed)
 			if err != nil {
-				log.Printf("failed to refresh player status", err)
+				log.Printf("failed to refresh player status %v", err)
 			}
 		}
 	}
@@ -278,7 +288,7 @@ func (gsvc *guildService) enqueue(p plugins.Plugin, arg string, statusChannelID 
 			log.Printf("read %v of %v, expected %v", d, md.Title, md.Duration)
 			log.Printf("reason: %v", err)
 			if statusMessageID != "" {
-				gsvc.session.ChannelMessageDelete(statusChannelID, statusMessageID)
+				gsvc.discord.ChannelMessageDelete(statusChannelID, statusMessageID)
 				gsvc.wg.Done()
 			}
 		}),
@@ -293,7 +303,7 @@ func (gsvc *guildService) reconnect() {
 	// TODO make sure discordvoice.player.Quit waits for the sendSong goroutine to finish
 	gsvc.player.Quit()
 	gsvc.player = dcv.Connect(
-		gsvc.session,
+		gsvc.discord,
 		gsvc.guildID,
 		gsvc.MusicChannel,
 		dcv.QueueLength(10),

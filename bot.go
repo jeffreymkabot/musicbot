@@ -2,6 +2,7 @@ package music
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 
@@ -12,18 +13,11 @@ import (
 const defaultCommandPrefix = "#!"
 const defaultMusicChannelPrefix = "music"
 
-// Soundcloud sets the clientID required by the soundcloud API and enables use of the soundcloud command.
-func Soundcloud(clientID string) {
-	// TODO
-	// b.soundcloud = clientID
-}
-
 type Bot struct {
 	mu            sync.RWMutex
-	session       *discordgo.Session
+	discord       *discordgo.Session
 	db            *boltGuildStorage
 	owner         string
-	soundcloud    string
 	me            *discordgo.User
 	guildServices map[string]GuildService
 }
@@ -34,34 +28,34 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 		return nil, err
 	}
 
-	session, err := discordgo.New("Bot " + token)
+	discord, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, err
 	}
-	session.LogLevel = discordgo.LogWarning
+	discord.LogLevel = discordgo.LogWarning
 	b := &Bot{
-		session:       session,
+		discord:       discord,
 		db:            db,
 		owner:         owner,
 		guildServices: make(map[string]GuildService),
 	}
 
-	session.AddHandler(onGuildCreate(b))
-	session.AddHandler(onMessageCreate(b))
-	session.AddHandler(onReady(b))
-	session.AddHandler(onMessageReactionAdd(b))
-	session.AddHandler(onMessageReactionRemove(b))
+	discord.AddHandler(onGuildCreate(b))
+	discord.AddHandler(onMessageCreate(b))
+	discord.AddHandler(onReady(b))
+	discord.AddHandler(onMessageReactionAdd(b))
+	discord.AddHandler(onMessageReactionRemove(b))
 
-	err = session.Open()
+	err = discord.Open()
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
 
 	// possible to take this from ready instead???
-	b.me, err = session.User("@me")
+	b.me, err = discord.User("@me")
 	if err != nil {
-		session.Close()
+		discord.Close()
 		db.Close()
 		return nil, err
 	}
@@ -71,10 +65,10 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 
 func (b *Bot) Stop() {
 	b.mu.Lock()
-	for _, gh := range b.guildServices {
-		gh.Close()
+	for _, svc := range b.guildServices {
+		svc.Close()
 	}
-	b.session.Close()
+	b.discord.Close()
 	b.db.Close()
 	b.mu.Unlock()
 }
@@ -112,7 +106,7 @@ func (db boltGuildStorage) Read(guildID string, info *GuildInfo) error {
 		bucket := tx.Bucket([]byte("guilds"))
 		val := bucket.Get([]byte(guildID))
 		if val == nil {
-			return nil
+			return errors.New("guild not found")
 		}
 		return json.Unmarshal(val, info)
 	})
