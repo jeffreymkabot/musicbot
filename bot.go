@@ -3,7 +3,6 @@ package music
 import (
 	"encoding/json"
 	"errors"
-	"strings"
 	"sync"
 
 	"github.com/boltdb/bolt"
@@ -93,15 +92,6 @@ func (b *Bot) Stop() {
 	b.discord.Close()
 	b.db.Close()
 	b.mu.Unlock()
-}
-
-func detectMusicChannel(g *discordgo.Guild) string {
-	for _, ch := range g.Channels {
-		if ch.Type == discordgo.ChannelTypeGuildVoice && strings.HasPrefix(strings.ToLower(ch.Name), defaultMusicChannelPrefix) {
-			return ch.ID
-		}
-	}
-	return ""
 }
 
 type boltGuildStorage struct {

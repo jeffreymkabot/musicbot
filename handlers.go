@@ -81,20 +81,27 @@ func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chann
 	}
 }
 
-// execute the help command with a nil guild service
 func onDirectMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
 	evt := GuildEvent{
+		Type:    MessageEvent,
 		Channel: *channel,
 		Message: *message,
+		Author:  *message.Author,
+		Body:    message.Content,
 	}
 	args := strings.Fields(strings.TrimPrefix(evt.Message.Content, defaultCommandPrefix))
 	cmd, parsedArgs, ok := matchCommand(b.commands, args)
+	// help command gets a synthetic guild service, _just_ what is needed to run
+	gsvc := &guildService{
+		discord:  b.discord,
+		commands: b.commands,
+	}
 	if !ok {
-		help.run(nil, evt, nil)
+		help.run(gsvc, evt, nil)
 	} else if cmd.name != help.name {
-		help.run(nil, evt, args)
+		help.run(gsvc, evt, args)
 	} else {
-		help.run(nil, evt, parsedArgs)
+		help.run(gsvc, evt, parsedArgs)
 	}
 }
 

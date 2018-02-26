@@ -205,6 +205,12 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 	}
 }
 
+func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
+	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.Channel.ID)
+	authorOK := !cmd.ownerOnly || isOwner(evt.Message.Author.ID)
+	return channelOK && authorOK
+}
+
 // act only on reactions placed on the status message
 func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 	gsvc.mu.Lock()
@@ -325,6 +331,15 @@ func (gsvc *guildService) reconnect() {
 	)
 }
 
+func detectMusicChannel(g *discordgo.Guild) string {
+	for _, ch := range g.Channels {
+		if ch.Type == discordgo.ChannelTypeGuildVoice && strings.HasPrefix(strings.ToLower(ch.Name), defaultMusicChannelPrefix) {
+			return ch.ID
+		}
+	}
+	return ""
+}
+
 func prettyTime(t time.Duration) string {
 	hours := int(t.Hours())
 	min := int(t.Minutes()) % 60
@@ -366,12 +381,6 @@ func statistics(data []float64) (avg float64, dev float64, max float64, min floa
 	dev = dev / float64(len(data))
 	dev = math.Sqrt(dev)
 	return
-}
-
-func (gsvc guildService) isAllowed(cmd command, evt GuildEvent) bool {
-	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.Channel.ID)
-	authorOK := !cmd.ownerOnly || isOwner(evt.Message.Author.ID)
-	return channelOK && authorOK
 }
 
 func contains(s []string, t string) bool {

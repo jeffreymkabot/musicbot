@@ -226,7 +226,7 @@ var help = command{
 		dmChannelID := ""
 		if evt.Channel.Type == discordgo.ChannelTypeDM || evt.Channel.Type == discordgo.ChannelTypeGroupDM {
 			dmChannelID = evt.Channel.ID
-		} else if channel, err := gsvc.discord.UserChannelCreate(evt.Message.Author.ID); err == nil {
+		} else if channel, err := gsvc.discord.UserChannelCreate(evt.Author.ID); err == nil {
 			dmChannelID = channel.ID
 		} else {
 			return err
@@ -275,6 +275,7 @@ func helpForCommand(cmd command) *discordgo.MessageEmbed {
 	return embed
 }
 
+// TODO update help instructions to reflect supported plugins
 func helpForCommandList(commands []command) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{}
 	embed.Title = "help"
