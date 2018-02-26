@@ -3,9 +3,15 @@ package plugins
 import (
 	"io"
 	"log"
+	"net/url"
 	"os/exec"
 	"time"
 )
+
+type Plugin interface {
+	CanHandle(string) bool
+	Resolve(string) (*Metadata, error)
+}
 
 type Metadata struct {
 	Title    string
@@ -13,8 +19,31 @@ type Metadata struct {
 	Open     func() (io.ReadCloser, error)
 }
 
-type Plugin interface {
-	Resolve(string) (*Metadata, error)
+// Streamlink is a generic plugin capable of handling a large variety of urls.
+// It should be considered last in order to prioritize more narrowly focused plugins.
+type Streamlink struct{}
+
+func (sl Streamlink) CanHandle(arg string) bool {
+	// fail fast to avoid launching another process
+	url, err := url.Parse(arg)
+	if err != nil || !url.IsAbs() {
+		return false
+	}
+	streamlink := exec.Command(
+		"streamlink",
+		"--can-handle-url",
+		arg,
+	)
+	return streamlink.Run() == nil
+}
+
+func (sl Streamlink) Resolve(arg string) (*Metadata, error) {
+	md := &Metadata{
+		Title:    arg,
+		Duration: 0,
+		Open:     streamlinkOpener(arg, "480p,720p,best"),
+	}
+	return md, nil
 }
 
 // format is comma separated list of stream precedence e.g. "480p,best"

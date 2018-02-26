@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -15,54 +14,52 @@ import (
 )
 
 type command struct {
-	name            string
-	alias           []string
-	usage           string // should at least have usage
-	short           string
-	long            string
-	ownerOnly       bool
+	name  string
+	alias []string
+	usage string // should at least have usage
+	short string
+	long  string
+	// only run for the owner of the bot
+	ownerOnly bool
+	// only run in a guild's whitelisted channels
 	restrictChannel bool
 	ack             string // must be an emoji, used to react on success
 	shortcut        string // must be an emoji, users can react to the status message to invoke this command
 	run             func(*guildService, GuildEvent, []string) error
 }
 
-// determine which command to run and with what arguments.
-// bool return will be false for no matching command, like with accessing maps
-// e.g. cmd, args, ok := parseCommand(argv)
-func parseCommand(args []string) (command, []string, bool) {
+// determine what to do in response to the provided arguments
+// bool return will be false for no match
+// e.g. cmd, args, ok := matchCommand(argv)
+func matchCommand(available []command, args []string) (command, []string, bool) {
 	if len(args) == 0 {
 		return command{}, args, false
 	}
-	// if arg[0] resembles a url try the domain as a command name/alias and args are arg[0:]
-	// else try arg[0] is a command name/alias and args are arg[1:]
-	candidateCmd := ""
-	if strings.HasPrefix(args[0], "http") {
-		if u, err := url.Parse(args[0]); err == nil {
-			candidateCmd = strings.ToLower(domainFrom(u.Hostname()))
-			if cmd, ok := commandByNameOrAlias(candidateCmd); ok {
-				return cmd, args, true
-			}
-		}
-	}
-	candidateCmd = strings.ToLower(args[0])
-	if cmd, ok := commandByNameOrAlias(candidateCmd); ok {
+
+	candidateCmd := strings.ToLower(args[0])
+	if cmd, ok := commandByNameOrAlias(available, candidateCmd); ok {
 		return cmd, args[1:], true
 	}
-	// TODO if still none try to see if streamlink will handle the url and synthesize a command
+
 	return command{}, args, false
 }
 
-// get "example" in example, example., example.com, www.example.com, www.system.example.com
-func domainFrom(hostname string) string {
-	parts := strings.Split(hostname, ".")
-	if len(parts) < 3 {
-		return parts[0]
+// synthesize a command using a plugin that can handle the provided arguments
+func matchPlugin(plugins []plugins.Plugin, args []string) (plugins.Plugin, bool) {
+	if len(args) == 0 {
+		return nil, false
 	}
-	return parts[len(parts)-2]
+
+	for _, pl := range plugins {
+		if pl.CanHandle(args[0]) {
+			return pl, true
+		}
+	}
+
+	return nil, false
 }
 
-func commandByNameOrAlias(candidate string) (command, bool) {
+func commandByNameOrAlias(commands []command, candidate string) (command, bool) {
 	for _, cmd := range commands {
 		if candidate == cmd.name {
 			return cmd, true
@@ -74,82 +71,6 @@ func commandByNameOrAlias(candidate string) (command, bool) {
 		}
 	}
 	return command{}, false
-}
-
-var commands []command
-
-// avoid initialization loop since help command refers to this list
-func init() {
-	commands = []command{
-		help,
-		youtube,
-		soundcloud,
-		twitch,
-		bandcamp,
-		pause,
-		skip,
-		clear,
-		reconnect,
-		get,
-		set,
-		setListen,
-		unsetListen,
-	}
-}
-
-var youtube = command{
-	name:            "youtube",
-	alias:           []string{"yt", "youtu"},
-	usage:           "youtube [url]",
-	restrictChannel: true,
-	ack:             "☑",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		if len(args) == 0 {
-			return errors.New("video please")
-		}
-		return gsvc.enqueue(evt, plugins.Youtube{}, args[0])
-	},
-}
-
-var soundcloud = command{
-	name:            "soundcloud",
-	alias:           []string{"sc", "snd"},
-	usage:           "soundcloud [url]",
-	restrictChannel: true,
-	ack:             "☑",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		if len(args) == 0 {
-			return errors.New("track please")
-		}
-		return gsvc.enqueue(evt, plugins.Soundcloud{gsvc.soundcloud}, args[0])
-	},
-}
-
-var bandcamp = command{
-	name:            "bandcamp",
-	alias:           []string{"bc"},
-	usage:           "bandcamp [url]",
-	restrictChannel: true,
-	ack:             "☑",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		if len(args) == 0 {
-			return errors.New("track please")
-		}
-		return gsvc.enqueue(evt, plugins.Bandcamp{}, args[0])
-	},
-}
-
-var twitch = command{
-	name:            "twitch",
-	usage:           "twitch [url]",
-	restrictChannel: true,
-	ack:             "☑",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		if len(args) == 0 {
-			return errors.New("channel please")
-		}
-		return gsvc.enqueue(evt, plugins.Twitch{}, args[0])
-	},
 }
 
 var reconnect = command{
@@ -312,14 +233,14 @@ var help = command{
 		}
 
 		if len(args) > 0 && args[0] != "" {
-			if cmd, ok := commandByNameOrAlias(args[0]); ok {
+			if cmd, ok := commandByNameOrAlias(gsvc.commands, args[0]); ok {
 				embed := helpForCommand(cmd)
 				_, err := gsvc.discord.ChannelMessageSendEmbed(dmChannelID, embed)
 				return err
 			}
 		}
 
-		embed := helpForCommandList(commands)
+		embed := helpForCommandList(gsvc.commands)
 		_, err := gsvc.discord.ChannelMessageSendEmbed(dmChannelID, embed)
 		return err
 	},

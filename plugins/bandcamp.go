@@ -7,13 +7,20 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"time"
 )
 
+var urlRegexpBc = regexp.MustCompile(`bandcamp\.com`)
+var trackinfoRegexp = regexp.MustCompile(`trackinfo: \[({.*})\]`)
+
 type Bandcamp struct{}
 
-var trackinfoRegexp = regexp.MustCompile(`trackinfo: \[({.*})\]`)
+func (bc Bandcamp) CanHandle(arg string) bool {
+	url, err := url.Parse(arg)
+	return err == nil && url.IsAbs() && urlRegexpBc.MatchString(url.Hostname())
+}
 
 func (bc Bandcamp) Resolve(arg string) (*Metadata, error) {
 	resp, err := http.Get(arg)

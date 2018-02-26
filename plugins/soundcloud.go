@@ -7,14 +7,22 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"time"
 )
 
 const endpointSc = "http://api.soundcloud.com/"
 const endpointScResolve = endpointSc + "resolve/"
 
+var urlRegexpSc = regexp.MustCompile(`soundcloud\.com`)
+
 type Soundcloud struct {
 	ClientID string
+}
+
+func (sc Soundcloud) CanHandle(arg string) bool {
+	url, err := url.Parse(arg)
+	return err == nil && url.IsAbs() && urlRegexpSc.MatchString(url.Hostname())
 }
 
 func (sc Soundcloud) Resolve(arg string) (*Metadata, error) {

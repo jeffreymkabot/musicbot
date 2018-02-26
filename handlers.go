@@ -31,7 +31,13 @@ func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 		if ok {
 			svc.Close()
 		}
-		b.guildServices[gc.Guild.ID] = Guild(b.discord, gc.Guild, b.db)
+		b.guildServices[gc.Guild.ID] = Guild(
+			gc.Guild,
+			session,
+			b.db,
+			b.commands,
+			b.plugins,
+		)
 	}
 }
 
@@ -82,7 +88,7 @@ func onDirectMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chan
 		Message: *message,
 	}
 	args := strings.Fields(strings.TrimPrefix(evt.Message.Content, defaultCommandPrefix))
-	cmd, parsedArgs, ok := parseCommand(args)
+	cmd, parsedArgs, ok := matchCommand(b.commands, args)
 	if !ok {
 		help.run(nil, evt, nil)
 	} else if cmd.name != help.name {

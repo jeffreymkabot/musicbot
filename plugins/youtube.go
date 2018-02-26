@@ -4,11 +4,20 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"regexp"
 
 	"github.com/jeffreymkabot/ytdl"
 )
 
+var urlRegexpYt = regexp.MustCompile(`youtube\.com|youtu\.be`)
+
 type Youtube struct{}
+
+func (yt Youtube) CanHandle(arg string) bool {
+	url, err := url.Parse(arg)
+	return err == nil && url.IsAbs() && urlRegexpYt.MatchString(url.Hostname())
+}
 
 func (yt Youtube) Resolve(arg string) (*Metadata, error) {
 	info, err := ytdl.GetVideoInfo(arg)

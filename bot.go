@@ -8,21 +8,24 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
+	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
 const defaultCommandPrefix = "#!"
 const defaultMusicChannelPrefix = "music"
 
 type Bot struct {
-	mu            sync.RWMutex
-	discord       *discordgo.Session
-	db            *boltGuildStorage
 	owner         string
 	me            *discordgo.User
+	discord       *discordgo.Session
+	db            *boltGuildStorage
+	commands      []command
+	plugins       []plugins.Plugin
+	mu            sync.RWMutex
 	guildServices map[string]GuildService
 }
 
-func New(token string, dbPath string, owner string) (*Bot, error) {
+func New(token string, dbPath string, owner string, soundcloud string) (*Bot, error) {
 	db, err := newBoltGuildStorage(dbPath)
 	if err != nil {
 		return nil, err
@@ -33,18 +36,37 @@ func New(token string, dbPath string, owner string) (*Bot, error) {
 		return nil, err
 	}
 	discord.LogLevel = discordgo.LogWarning
+
 	b := &Bot{
-		discord:       discord,
-		db:            db,
-		owner:         owner,
+		owner:   owner,
+		discord: discord,
+		db:      db,
+		commands: []command{
+			help,
+			pause,
+			skip,
+			clear,
+			reconnect,
+			get,
+			set,
+			setListen,
+			unsetListen,
+		},
+		plugins: []plugins.Plugin{
+			plugins.Youtube{},
+			plugins.Soundcloud{ClientID: soundcloud},
+			plugins.Twitch{},
+			plugins.Bandcamp{},
+			plugins.Streamlink{},
+		},
 		guildServices: make(map[string]GuildService),
 	}
 
 	discord.AddHandler(onGuildCreate(b))
 	discord.AddHandler(onMessageCreate(b))
-	discord.AddHandler(onReady(b))
 	discord.AddHandler(onMessageReactionAdd(b))
 	discord.AddHandler(onMessageReactionRemove(b))
+	discord.AddHandler(onReady(b))
 
 	err = discord.Open()
 	if err != nil {
@@ -101,24 +123,26 @@ func newBoltGuildStorage(dbPath string) (*boltGuildStorage, error) {
 	return &boltGuildStorage{db}, nil
 }
 
-func (db boltGuildStorage) Read(guildID string, info *GuildInfo) error {
-	return db.View(func(tx *bolt.Tx) error {
+func (db boltGuildStorage) Get(guildID string) (GuildInfo, error) {
+	info := GuildInfo{}
+	err := db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("guilds"))
 		val := bucket.Get([]byte(guildID))
 		if val == nil {
 			return errors.New("guild not found")
 		}
-		return json.Unmarshal(val, info)
+		return json.Unmarshal(val, &info)
 	})
+	return info, err
 }
 
-func (db boltGuildStorage) Write(guildID string, info GuildInfo) error {
+func (db boltGuildStorage) Put(guildID string, info GuildInfo) error {
+	val, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
 	return db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("guilds"))
-		val, err := json.Marshal(info)
-		if err != nil {
-			return err
-		}
 		return bucket.Put([]byte(guildID), val)
 	})
 }

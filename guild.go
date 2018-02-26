@@ -70,12 +70,12 @@ func (svc *syncGuildService) Close() {
 type guildService struct {
 	syncGuildService
 	GuildInfo
-	guildID string
-	// TODO soundcloud client id
-	soundcloud string
-	store      GuildStorage
-	discord    *discordgo.Session
-	player     *dcv.Player
+	guildID  string
+	discord  *discordgo.Session
+	store    GuildStorage
+	player   *dcv.Player
+	commands []command
+	plugins  []plugins.Plugin
 	// TODO how to manage statusMessage state in a reasonable way without mutex?
 	mu                  sync.Mutex
 	playerStatusMessage *discordgo.Message
@@ -83,8 +83,8 @@ type guildService struct {
 
 // GuildStorage is used to persist and retrieve guild configuration.
 type GuildStorage interface {
-	Read(guildID string, info *GuildInfo) error
-	Write(guildID string, info GuildInfo) error
+	Get(guildID string) (GuildInfo, error)
+	Put(guildID string, info GuildInfo) error
 }
 
 // GuildInfo members are persisted using GuildStorage
@@ -104,18 +104,22 @@ var defaultGuildInfo = GuildInfo{
 }
 
 // Guild creates a new GuildService.
-// The service returned is safe to use in multiple threads.
-func Guild(session *discordgo.Session, guild *discordgo.Guild, store GuildStorage) GuildService {
+// The service returned is safe to use in multiple goroutines.
+func Guild(guild *discordgo.Guild, session *discordgo.Session, store GuildStorage, commands []command, plugins []plugins.Plugin) GuildService {
 	gsvc := guildService{
-		guildID: guild.ID,
-		store:   store,
-		discord: session,
+		guildID:  guild.ID,
+		discord:  session,
+		store:    store,
+		commands: commands,
+		plugins:  plugins,
 	}
 
-	if err := store.Read(guild.ID, &gsvc.GuildInfo); err != nil {
-		gsvc.GuildInfo = defaultGuildInfo
-		gsvc.MusicChannel = detectMusicChannel(guild)
+	info, err := store.Get(gsvc.guildID)
+	if err != nil {
+		info = defaultGuildInfo
+		info.MusicChannel = detectMusicChannel(guild)
 	}
+	gsvc.GuildInfo = info
 
 	idleChannel := guild.AfkChannelID
 	if gsvc.MusicChannel != "" {
@@ -156,29 +160,38 @@ func Guild(session *discordgo.Session, guild *discordgo.Guild, store GuildStorag
 
 // act only on messages beginning with an appropriate prefix in an appropriate channel by an appropriate user
 func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
-	prefix := ""
+	msgPrefix := ""
 	if strings.HasPrefix(evt.Body, gsvc.Prefix) {
-		prefix = gsvc.Prefix
+		msgPrefix = gsvc.Prefix
 	} else if strings.HasPrefix(evt.Body, defaultCommandPrefix) {
-		prefix = defaultCommandPrefix
+		msgPrefix = defaultCommandPrefix
 	} else {
 		return
 	}
 
-	args := strings.Fields(strings.TrimPrefix(evt.Body, prefix))
-	cmd, args, ok := parseCommand(args)
+	args := strings.Fields(strings.TrimPrefix(evt.Body, msgPrefix))
+
+	cmd, args, ok := matchCommand(gsvc.commands, args)
 	if !ok {
+		// possibly synthesize a command for a matching plugin
+		cmd = command{
+			restrictChannel: true,
+			ownerOnly:       false,
+			ack:             "☑",
+		}
+	}
+	if !gsvc.isAllowed(cmd, evt) {
 		return
 	}
-
-	if cmd.restrictChannel && !contains(gsvc.ListenChannels, evt.Channel.ID) {
-		log.Printf("command %s invoked in unregistered channel %s", cmd.name, evt.Channel.ID)
-		return
-	}
-
-	if cmd.ownerOnly && !isOwner(evt.Message.Author.ID) {
-		log.Printf("user %s not allowed to execute command %s", evt.Message.Author.ID, cmd.name)
-		return
+	// query plugins _after_ validating the event in order to fail fast
+	if !ok {
+		plugin, ok := matchPlugin(gsvc.plugins, args)
+		if !ok {
+			return
+		}
+		cmd.run = func(gsvc *guildService, evt GuildEvent, args []string) error {
+			return gsvc.enqueue(evt, plugin, args[0])
+		}
 	}
 
 	err := cmd.run(gsvc, evt, args)
@@ -198,7 +211,7 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 	statusChannelID, statusMessageID := gsvc.playerStatusMessage.ChannelID, gsvc.playerStatusMessage.ID
 	gsvc.mu.Unlock()
 	if evt.Channel.ID == statusChannelID && evt.Message.ID == statusMessageID {
-		for _, cmd := range commands {
+		for _, cmd := range gsvc.commands {
 			// no viable vector for send error response or success ack
 			if cmd.shortcut == evt.Body {
 				cmd.run(gsvc, evt, nil)
@@ -251,7 +264,7 @@ func (gsvc *guildService) enqueue(evt GuildEvent, p plugins.Plugin, arg string) 
 			gsvc.playerStatusMessage = msg
 			gsvc.mu.Unlock()
 
-			for _, cmd := range commands {
+			for _, cmd := range gsvc.commands {
 				if cmd.shortcut != "" {
 					gsvc.discord.MessageReactionAdd(statusChannelID, statusMessageID, cmd.shortcut)
 				}
@@ -298,7 +311,7 @@ func (gsvc *guildService) enqueue(evt GuildEvent, p plugins.Plugin, arg string) 
 }
 
 func (gsvc *guildService) save() error {
-	return gsvc.store.Write(gsvc.guildID, gsvc.GuildInfo)
+	return gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
 }
 
 func (gsvc *guildService) reconnect() {
@@ -353,6 +366,12 @@ func statistics(data []float64) (avg float64, dev float64, max float64, min floa
 	dev = dev / float64(len(data))
 	dev = math.Sqrt(dev)
 	return
+}
+
+func (gsvc guildService) isAllowed(cmd command, evt GuildEvent) bool {
+	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.Channel.ID)
+	authorOK := !cmd.ownerOnly || isOwner(evt.Message.Author.ID)
+	return channelOK && authorOK
 }
 
 func contains(s []string, t string) bool {
