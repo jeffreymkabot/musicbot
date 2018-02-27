@@ -45,6 +45,7 @@ func New(token string, dbPath string, owner string, soundcloud string) (*Bot, er
 			pause,
 			skip,
 			clear,
+			requeue,
 			reconnect,
 			get,
 			set,

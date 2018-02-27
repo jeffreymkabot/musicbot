@@ -79,6 +79,7 @@ func commandByNameOrAlias(commands []command, candidate string) (command, bool) 
 var reconnect = command{
 	name:            "reconnect",
 	usage:           "reconnect",
+	long:            "Restart the music player.  This will empty the playlist.",
 	restrictChannel: true,
 	ack:             "🆗",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
@@ -100,6 +101,7 @@ var reconnect = command{
 var skip = command{
 	name:            "skip",
 	usage:           "skip",
+	long:            "Skip the currently playing song.",
 	restrictChannel: true,
 	shortcut:        "⏭",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
@@ -112,6 +114,7 @@ var pause = command{
 	name:            "pause",
 	alias:           []string{"p"},
 	usage:           "pause",
+	long:            "Pause/unpause the currently playing song.",
 	restrictChannel: true,
 	shortcut:        "⏯",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
@@ -124,6 +127,7 @@ var clear = command{
 	name:            "clear",
 	alias:           []string{"cl"},
 	usage:           "clear",
+	long:            "Clear the playlist.",
 	restrictChannel: true,
 	ack:             "🔘",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
@@ -132,9 +136,27 @@ var clear = command{
 	},
 }
 
+var requeue = command{
+	name:            "requeue",
+	alias:           []string{"rq"},
+	usage:           "requeue",
+	long:            "Requeue the currently playing song.",
+	restrictChannel: true,
+	shortcut:        "🔂",
+	ack:             "☑",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		play, ok := gsvc.player.NowPlaying()
+		if !ok {
+			return errors.New("nothing playing")
+		}
+		return gsvc.player.Enqueue(evt, gsvc.MusicChannel, play.metadata, gsvc.Loudness)
+	},
+}
+
 var get = command{
 	name:  "get",
 	usage: "get [field]",
+	long:  "Get preferences saved for this guild.  Supports regular expressions.\nE.g., `get .*` to get all preferences.",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
 		if len(args) == 0 {
 			return errors.New("field please")
@@ -177,6 +199,7 @@ var get = command{
 var set = command{
 	name:  "set",
 	usage: "set [field] [value]",
+	long:  "Set preferences for this guild.  Omit [value] to empty the preference.",
 	ack:   "🆗",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
 		if len(args) == 0 {
@@ -254,6 +277,7 @@ var help = command{
 	name:  "help",
 	alias: []string{"h"},
 	usage: "help [command name]",
+	long:  "Get help about features and commands.",
 	ack:   "📬",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
 		// help gets whispered to the user

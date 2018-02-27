@@ -212,8 +212,11 @@ func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
 
 // act only on reactions placed on the status message
 func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
-	statusChannelID, statusMessageID := gsvc.player.StatusMessagePtr()
-	if evt.Channel.ID == statusChannelID && evt.Message.ID == statusMessageID {
+	nowPlaying, ok := gsvc.player.NowPlaying()
+	if !ok {
+		return
+	}
+	if evt.Channel.ID == nowPlaying.statusMessage.ChannelID && evt.Message.ID == nowPlaying.statusMessage.ID {
 		for _, cmd := range gsvc.commands {
 			// no viable vector for send error response or success ack
 			if cmd.shortcut == evt.Body {

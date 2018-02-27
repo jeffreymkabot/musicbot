@@ -19,7 +19,12 @@ type GuildPlayer interface {
 	Clear()
 	Close()
 	// TODO how to manage statusMessage state in a reasonable way without mutex?
-	StatusMessagePtr() (channelID string, messageID string)
+	NowPlaying() (Play, bool)
+}
+
+type Play struct {
+	statusMessage *discordgo.Message
+	metadata      *plugins.Metadata
 }
 
 type guildPlayer struct {
@@ -30,7 +35,7 @@ type guildPlayer struct {
 	wg           sync.WaitGroup
 	mu           sync.Mutex
 	// TODO how to manage statusMessage state in a reasonable way without mutex?
-	statusMessage *discordgo.Message
+	nowPlaying Play
 }
 
 func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID string, cmdShortcuts []string) GuildPlayer {
@@ -47,6 +52,7 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 	}
 }
 
+// TODO don't use nullable metadata
 func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md *plugins.Metadata, loudness float64) error {
 	if voiceChannelID == "" {
 		return errors.New("set a music voice channel")
@@ -77,9 +83,11 @@ func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md *plugin
 
 			// wait for the status message to be deleted when the guild player closes
 			gp.wg.Add(1)
-
 			gp.mu.Lock()
-			gp.statusMessage = msg
+			gp.nowPlaying = Play{
+				statusMessage: msg,
+				metadata:      md,
+			}
 			gp.mu.Unlock()
 
 			for _, emoji := range gp.cmdShortcuts {
@@ -121,7 +129,7 @@ func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md *plugin
 			if statusMessageID != "" {
 				gp.discord.ChannelMessageDelete(statusChannelID, statusMessageID)
 				gp.mu.Lock()
-				gp.statusMessage = nil
+				gp.nowPlaying = Play{}
 				gp.mu.Unlock()
 				gp.wg.Done()
 			}
@@ -146,8 +154,11 @@ func (gp *guildPlayer) Close() {
 	gp.wg.Wait()
 }
 
-func (gp *guildPlayer) StatusMessagePtr() (string, string) {
+func (gp *guildPlayer) NowPlaying() (Play, bool) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
-	return gp.statusMessage.ChannelID, gp.statusMessage.ID
+	if gp.nowPlaying.metadata == nil || gp.nowPlaying.statusMessage == nil {
+		return Play{}, false
+	}
+	return gp.nowPlaying, true
 }
