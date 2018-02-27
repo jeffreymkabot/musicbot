@@ -94,6 +94,35 @@ func (b *Bot) Stop() {
 	b.mu.Unlock()
 }
 
+func (b *Bot) AddGuild(guild *discordgo.Guild) {
+	// cleanup existing guild service if exists
+	// e.g. unhandled disconnect, kick and reinvite
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if svc, ok := b.guildServices[guild.ID]; ok {
+		svc.Close()
+	}
+
+	// alternative is to lookup guild in database here and resolve idlechannel immediately,
+	// would have to lookup guild twice or pass info into guild fn
+	playerOpener := func(idleChannelID string) GuildPlayer {
+		return NewGuildPlayer(
+			guild.ID,
+			b.discord,
+			idleChannelID,
+			commandShortcuts(b.commands),
+		)
+	}
+	b.guildServices[guild.ID] = Guild(
+		guild,
+		b.discord,
+		b.db,
+		playerOpener,
+		b.commands,
+		b.plugins,
+	)
+}
+
 type boltGuildStorage struct {
 	*bolt.DB
 }

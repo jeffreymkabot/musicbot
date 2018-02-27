@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/fatih/structs"
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
@@ -44,7 +46,8 @@ func matchCommand(available []command, args []string) (command, []string, bool) 
 	return command{}, args, false
 }
 
-// synthesize a command using a plugin that can handle the provided arguments
+// determine a plugin that can handle the provided arguments
+// bool return will be false for no match
 func matchPlugin(plugins []plugins.Plugin, args []string) (plugins.Plugin, bool) {
 	if len(args) == 0 {
 		return nil, false
@@ -79,7 +82,17 @@ var reconnect = command{
 	restrictChannel: true,
 	ack:             "🆗",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		gsvc.reconnect()
+		if gsvc.MusicChannel == "" {
+			return errors.New("set a music voice channel")
+		}
+		gsvc.player.Close()
+		// idle in the music channel
+		gsvc.player = NewGuildPlayer(
+			gsvc.guildID,
+			gsvc.discord,
+			gsvc.MusicChannel,
+			commandShortcuts(gsvc.commands),
+		)
 		return nil
 	},
 }
@@ -158,28 +171,49 @@ var get = command{
 	},
 }
 
+// TODO validate musicchannel
+// invalid channel can cause bot to repeatedly disconnect session and get stuck in ready event loop
+// omit value to zero the field
 var set = command{
 	name:  "set",
 	usage: "set [field] [value]",
 	ack:   "🆗",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		if len(args) < 2 {
-			return errors.New("field and value please")
+		if len(args) == 0 {
+			return errors.New("field please")
 		}
-		info := reflect.ValueOf(&gsvc.GuildInfo).Elem()
-		infoType := info.Type()
-		for i := 0; i < infoType.NumField(); i++ {
-			fldName := infoType.Field(i).Name
-			fldType := infoType.Field(i).Type.Kind()
-			// TODO support non string fields e.g. loudness is a float64
-			if fldType == reflect.String && strings.ToLower(fldName) == strings.ToLower(args[0]) {
-				info.Field(i).SetString(args[1])
-				gsvc.save()
-				return nil
+		defer gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
+		info := structs.New(&gsvc.GuildInfo)
+		for _, fld := range info.Fields() {
+			if strings.ToLower(fld.Name()) == strings.ToLower(args[0]) {
+				if len(args) == 1 {
+					return fld.Zero()
+				}
+				val, err := resolveValue(fld.Kind(), args[1])
+				if err != nil {
+					return err
+				}
+				return fld.Set(val)
 			}
 		}
-		return errors.New("settable field not found")
+		return errors.New("field not found")
 	},
+}
+
+func resolveValue(kind reflect.Kind, arg string) (val interface{}, err error) {
+	switch kind {
+	case reflect.String:
+		val = arg
+	case reflect.Bool:
+		val, err = strconv.ParseBool(arg)
+	case reflect.Int:
+		val, err = strconv.Atoi(arg)
+	case reflect.Float64:
+		val, err = strconv.ParseFloat(arg, 64)
+	default:
+		val, err = nil, errors.New("unsupported type")
+	}
+	return
 }
 
 var setListen = command{
@@ -194,7 +228,7 @@ var setListen = command{
 		if !contains(gsvc.ListenChannels, textChannelID) {
 			gsvc.ListenChannels = append(gsvc.ListenChannels, textChannelID)
 		}
-		return gsvc.save()
+		return gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
 	},
 }
 
@@ -212,7 +246,7 @@ var unsetListen = command{
 				gsvc.ListenChannels = append(gsvc.ListenChannels[:i], gsvc.ListenChannels[i+1:]...)
 			}
 		}
-		return gsvc.save()
+		return gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
 	},
 }
 
@@ -275,11 +309,16 @@ func helpForCommand(cmd command) *discordgo.MessageEmbed {
 	return embed
 }
 
+var helpDesc = fmt.Sprintf(
+	"All guild commands start with `%s`.  Queue a song using `%s [url]`.\nTo get more help about a command use `%s help [command name]` or just whisper me the command name.",
+	defaultCommandPrefix, defaultCommandPrefix, defaultCommandPrefix,
+)
+
 // TODO update help instructions to reflect supported plugins
 func helpForCommandList(commands []command) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{}
 	embed.Title = "help"
-	embed.Description = "Command can be inferred from a url if the url's domain is a command name or alias."
+	embed.Description = helpDesc
 	buf := &bytes.Buffer{}
 	w := tabwriter.NewWriter(buf, 4, 4, 0, '.', 0)
 	for _, cmd := range commands {
@@ -306,4 +345,13 @@ func helpForCommandList(commands []command) *discordgo.MessageEmbed {
 		Text: "Commands with a * will only run in whitelisted channels.",
 	}
 	return embed
+}
+
+func commandShortcuts(commands []command) (sc []string) {
+	for _, cmd := range commands {
+		if cmd.shortcut != "" {
+			sc = append(sc, cmd.shortcut)
+		}
+	}
+	return
 }

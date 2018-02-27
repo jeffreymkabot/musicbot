@@ -41,7 +41,8 @@ func (sl Streamlink) Resolve(arg string) (*Metadata, error) {
 	md := &Metadata{
 		Title:    arg,
 		Duration: 0,
-		Open:     streamlinkOpener(arg, "480p,720p,best"),
+		// guess at the name of audio only streams that might be available
+		Open: streamlinkOpener(arg, "audio,audio_only,480p,720p,best"),
 	}
 	return md, nil
 }

@@ -23,21 +23,7 @@ func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
 func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 	return func(session *discordgo.Session, gc *discordgo.GuildCreate) {
 		log.Printf("guild create %v", gc.Guild.ID)
-		// cleanup existing guild service if exists
-		// e.g. unhandled disconnect, kick and reinvite
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		svc, ok := b.guildServices[gc.Guild.ID]
-		if ok {
-			svc.Close()
-		}
-		b.guildServices[gc.Guild.ID] = Guild(
-			gc.Guild,
-			session,
-			b.db,
-			b.commands,
-			b.plugins,
-		)
+		b.AddGuild(gc.Guild)
 	}
 }
 

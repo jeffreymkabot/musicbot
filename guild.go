@@ -3,14 +3,12 @@ package music
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	dcv "github.com/jeffreymkabot/discordvoice"
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
@@ -73,12 +71,9 @@ type guildService struct {
 	guildID  string
 	discord  *discordgo.Session
 	store    GuildStorage
-	player   *dcv.Player
+	player   GuildPlayer
 	commands []command
 	plugins  []plugins.Plugin
-	// TODO how to manage statusMessage state in a reasonable way without mutex?
-	mu                  sync.Mutex
-	playerStatusMessage *discordgo.Message
 }
 
 // GuildStorage is used to persist and retrieve guild configuration.
@@ -105,39 +100,37 @@ var defaultGuildInfo = GuildInfo{
 
 // Guild creates a new GuildService.
 // The service returned is safe to use in multiple goroutines.
-func Guild(guild *discordgo.Guild, session *discordgo.Session, store GuildStorage, commands []command, plugins []plugins.Plugin) GuildService {
-	gsvc := guildService{
-		guildID:  guild.ID,
-		discord:  session,
-		store:    store,
-		commands: commands,
-		plugins:  plugins,
-	}
-
-	info, err := store.Get(gsvc.guildID)
+func Guild(
+	guild *discordgo.Guild,
+	discord *discordgo.Session,
+	store GuildStorage,
+	playerOpener func(idleChannelID string) GuildPlayer,
+	commands []command,
+	plugins []plugins.Plugin,
+) GuildService {
+	info, err := store.Get(guild.ID)
 	if err != nil {
 		info = defaultGuildInfo
 		info.MusicChannel = detectMusicChannel(guild)
+		store.Put(guild.ID, info)
 	}
-	gsvc.GuildInfo = info
-
-	idleChannel := guild.AfkChannelID
-	if gsvc.MusicChannel != "" {
-		idleChannel = gsvc.MusicChannel
-	}
-
-	gsvc.player = dcv.Connect(
-		session,
-		guild.ID,
-		idleChannel,
-		dcv.QueueLength(10),
-	)
 
 	eventChan := make(chan GuildEvent)
-	gsvc.syncGuildService = syncGuildService{
-		eventChan: eventChan,
-		wg:        sync.WaitGroup{},
-		closed:    make(chan struct{}),
+	gsvc := &guildService{
+		syncGuildService: syncGuildService{
+			eventChan: eventChan,
+			wg:        sync.WaitGroup{},
+			closed:    make(chan struct{}),
+		},
+		GuildInfo: info,
+		guildID:   guild.ID,
+		discord:   discord,
+		store:     store,
+		// idle in the music channel
+		// TODO do not provide an empty channel
+		player:   playerOpener(info.MusicChannel),
+		commands: commands,
+		plugins:  plugins,
 	}
 
 	gsvc.wg.Add(1)
@@ -150,12 +143,12 @@ func Guild(guild *discordgo.Guild, session *discordgo.Session, store GuildStorag
 				gsvc.handleReactionEvent(evt)
 			}
 		}
-		gsvc.player.Quit()
-		gsvc.save()
+		gsvc.player.Close()
+		gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
 		gsvc.wg.Done()
 	}()
 
-	return &gsvc
+	return gsvc
 }
 
 // act only on messages beginning with an appropriate prefix in an appropriate channel by an appropriate user
@@ -190,7 +183,13 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 			return
 		}
 		cmd.run = func(gsvc *guildService, evt GuildEvent, args []string) error {
-			return gsvc.enqueue(evt, plugin, args[0])
+			gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
+			defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
+			md, err := plugin.Resolve(args[0])
+			if err != nil {
+				return err
+			}
+			return gsvc.player.Enqueue(evt, gsvc.MusicChannel, md, gsvc.Loudness)
 		}
 	}
 
@@ -213,122 +212,16 @@ func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
 
 // act only on reactions placed on the status message
 func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
-	gsvc.mu.Lock()
-	statusChannelID, statusMessageID := gsvc.playerStatusMessage.ChannelID, gsvc.playerStatusMessage.ID
-	gsvc.mu.Unlock()
+	statusChannelID, statusMessageID := gsvc.player.StatusMessagePtr()
 	if evt.Channel.ID == statusChannelID && evt.Message.ID == statusMessageID {
 		for _, cmd := range gsvc.commands {
 			// no viable vector for send error response or success ack
 			if cmd.shortcut == evt.Body {
-				cmd.run(gsvc, evt, nil)
+				cmd.run(gsvc, evt, []string{})
 				return
 			}
 		}
 	}
-}
-
-func (gsvc *guildService) enqueue(evt GuildEvent, p plugins.Plugin, arg string) error {
-	musicChannelID := gsvc.MusicChannel
-	if musicChannelID == "" {
-		return errors.New("no music channel set up")
-	}
-
-	gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
-	defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
-	md, err := p.Resolve(arg)
-	if err != nil {
-		return err
-	}
-
-	statusChannelID, statusMessageID := evt.Channel.ID, ""
-	embed := &discordgo.MessageEmbed{}
-	embed.Color = 0xa680ee
-	embed.Footer = &discordgo.MessageEmbedFooter{}
-	refreshStatus := func(playing bool, elapsed time.Duration, next string) {
-		if playing {
-			embed.Title = "▶️ " + md.Title
-		} else {
-			embed.Title = "⏸️ " + md.Title
-		}
-		embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
-		if next != "" {
-			embed.Footer.Text = "On Deck: " + next
-		}
-
-		if statusMessageID == "" {
-			msg, err := gsvc.discord.ChannelMessageSendEmbed(statusChannelID, embed)
-			if err != nil {
-				log.Printf("failed to display player status %v", err)
-				return
-			}
-			statusMessageID = msg.ID
-
-			// wait for the status message to be deleted when the guildservice closes
-			gsvc.wg.Add(1)
-
-			gsvc.mu.Lock()
-			gsvc.playerStatusMessage = msg
-			gsvc.mu.Unlock()
-
-			for _, cmd := range gsvc.commands {
-				if cmd.shortcut != "" {
-					gsvc.discord.MessageReactionAdd(statusChannelID, statusMessageID, cmd.shortcut)
-				}
-			}
-		} else {
-			_, err := gsvc.discord.ChannelMessageEditEmbed(statusChannelID, statusMessageID, embed)
-			if err != nil {
-				log.Printf("failed to refresh player status %v", err)
-			}
-		}
-	}
-
-	return gsvc.player.Enqueue(
-		musicChannelID,
-		md.Title,
-		md.Open,
-		dcv.Duration(md.Duration),
-		dcv.Loudness(gsvc.Loudness),
-		dcv.OnStart(func() { refreshStatus(true, 0, gsvc.player.Next()) }),
-		dcv.OnPause(func(d time.Duration) { refreshStatus(false, d, gsvc.player.Next()) }),
-		dcv.OnResume(func(d time.Duration) { refreshStatus(true, d, gsvc.player.Next()) }),
-		dcv.OnProgress(
-			func(d time.Duration, frames []time.Time) {
-				avg, dev, max, min := statistics(latencies(frames))
-				embed.Fields = []*discordgo.MessageEmbedField{
-					&discordgo.MessageEmbedField{
-						Name:  "Debug",
-						Value: fmt.Sprintf("`avg %.3fms`, `dev %.3fms`, `max %.3fms`, `min %.3fms`", avg, dev, max, min),
-					},
-				}
-				refreshStatus(true, d, gsvc.player.Next())
-			},
-			5*time.Second,
-		),
-		dcv.OnEnd(func(d time.Duration, err error) {
-			log.Printf("read %v of %v, expected %v", d, md.Title, md.Duration)
-			log.Printf("reason: %v", err)
-			if statusMessageID != "" {
-				gsvc.discord.ChannelMessageDelete(statusChannelID, statusMessageID)
-				gsvc.wg.Done()
-			}
-		}),
-	)
-}
-
-func (gsvc *guildService) save() error {
-	return gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
-}
-
-func (gsvc *guildService) reconnect() {
-	// TODO make sure discordvoice.player.Quit waits for the sendSong goroutine to finish
-	gsvc.player.Quit()
-	gsvc.player = dcv.Connect(
-		gsvc.discord,
-		gsvc.guildID,
-		gsvc.MusicChannel,
-		dcv.QueueLength(10),
-	)
 }
 
 func detectMusicChannel(g *discordgo.Guild) string {
