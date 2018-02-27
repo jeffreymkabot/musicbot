@@ -197,10 +197,11 @@ var get = command{
 // invalid channel can cause bot to repeatedly disconnect session and get stuck in ready event loop
 // omit value to zero the field
 var set = command{
-	name:  "set",
-	usage: "set [field] [value]",
-	long:  "Set preferences for this guild.  Omit [value] to empty the preference.",
-	ack:   "🆗",
+	name:      "set",
+	usage:     "set [field] [value]",
+	long:      "Set preferences for this guild.  Omit [value] to empty the preference.",
+	ack:       "🆗",
+	ownerOnly: true,
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
 		if len(args) == 0 {
 			return errors.New("field please")

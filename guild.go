@@ -68,12 +68,13 @@ func (svc *syncGuildService) Close() {
 type guildService struct {
 	syncGuildService
 	GuildInfo
-	guildID  string
-	discord  *discordgo.Session
-	store    GuildStorage
-	player   GuildPlayer
-	commands []command
-	plugins  []plugins.Plugin
+	guildID      string
+	guildOwnerID string
+	discord      *discordgo.Session
+	store        GuildStorage
+	player       GuildPlayer
+	commands     []command
+	plugins      []plugins.Plugin
 }
 
 // GuildStorage is used to persist and retrieve guild configuration.
@@ -122,10 +123,11 @@ func Guild(
 			wg:        sync.WaitGroup{},
 			closed:    make(chan struct{}),
 		},
-		GuildInfo: info,
-		guildID:   guild.ID,
-		discord:   discord,
-		store:     store,
+		GuildInfo:    info,
+		guildID:      guild.ID,
+		guildOwnerID: guild.OwnerID,
+		discord:      discord,
+		store:        store,
 		// idle in the music channel
 		// TODO do not provide an empty channel
 		player:   playerOpener(info.MusicChannel),
@@ -206,7 +208,7 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 
 func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
 	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.Channel.ID)
-	authorOK := !cmd.ownerOnly || isOwner(evt.Message.Author.ID)
+	authorOK := !cmd.ownerOnly || evt.Message.Author.ID == gsvc.guildOwnerID
 	return channelOK && authorOK
 }
 
@@ -285,10 +287,5 @@ func contains(s []string, t string) bool {
 			return true
 		}
 	}
-	return false
-}
-
-// TODO
-func isOwner(userID string) bool {
 	return false
 }
