@@ -25,9 +25,10 @@ func (sc Soundcloud) CanHandle(arg string) bool {
 	return err == nil && url.IsAbs() && urlRegexpSc.MatchString(url.Hostname())
 }
 
-func (sc Soundcloud) Resolve(arg string) (*Metadata, error) {
+func (sc Soundcloud) Resolve(arg string) (md Metadata, err error) {
 	if sc.ClientID == "" {
-		return nil, errors.New("no soundcloud client id set up")
+		err = errors.New("no soundcloud client id set up")
+		return
 	}
 
 	query := url.Values{}
@@ -37,15 +38,17 @@ func (sc Soundcloud) Resolve(arg string) (*Metadata, error) {
 	resp, err := http.Get(endpointScResolve + "?" + query.Encode())
 	log.Printf("resp %#v", resp)
 	if err != nil {
-		return nil, err
+		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New(resp.Status)
+		err = errors.New(resp.Status)
+		return
 	}
 	if resp.ContentLength == 0 {
-		return nil, errors.New("no content")
+		err = errors.New("no content")
+		return
 	}
 
 	var respJSON struct {
@@ -59,7 +62,7 @@ func (sc Soundcloud) Resolve(arg string) (*Metadata, error) {
 	dec := json.NewDecoder(resp.Body)
 	err = dec.Decode(&respJSON)
 	if err != nil {
-		return nil, err
+		return
 	}
 	log.Printf("track info %#v", respJSON)
 
@@ -70,12 +73,13 @@ func (sc Soundcloud) Resolve(arg string) (*Metadata, error) {
 		dlUrl = respJSON.StreamURL
 	}
 	if dlUrl == "" {
-		return nil, errors.New("couldn't get a download url")
+		err = errors.New("couldn't get a download url")
+		return
 	}
 
 	query = url.Values{}
 	query.Add("client_id", sc.ClientID)
-	md := &Metadata{
+	md = Metadata{
 		Title:    respJSON.Title,
 		Duration: time.Duration(respJSON.Duration) * time.Millisecond,
 		Open: func() (io.ReadCloser, error) {
@@ -83,5 +87,5 @@ func (sc Soundcloud) Resolve(arg string) (*Metadata, error) {
 			return resp.Body, err
 		},
 	}
-	return md, nil
+	return
 }

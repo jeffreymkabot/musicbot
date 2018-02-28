@@ -10,7 +10,7 @@ import (
 
 type Plugin interface {
 	CanHandle(string) bool
-	Resolve(string) (*Metadata, error)
+	Resolve(string) (Metadata, error)
 }
 
 type Metadata struct {
@@ -37,14 +37,14 @@ func (sl Streamlink) CanHandle(arg string) bool {
 	return streamlink.Run() == nil
 }
 
-func (sl Streamlink) Resolve(arg string) (*Metadata, error) {
-	md := &Metadata{
+func (sl Streamlink) Resolve(arg string) (md Metadata, err error) {
+	md = Metadata{
 		Title:    arg,
 		Duration: 0,
 		// guess at the name of audio only streams that might be available
 		Open: streamlinkOpener(arg, "audio,audio_only,480p,720p,best"),
 	}
-	return md, nil
+	return
 }
 
 // format is comma separated list of stream precedence e.g. "480p,best"

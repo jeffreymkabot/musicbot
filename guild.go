@@ -214,7 +214,7 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 	if !ok {
 		return
 	}
-	if evt.Channel.ID == nowPlaying.statusMessage.ChannelID && evt.Message.ID == nowPlaying.statusMessage.ID {
+	if evt.Channel.ID == nowPlaying.statusMessageChannelID && evt.Message.ID == nowPlaying.statusMessageID {
 		for _, cmd := range gsvc.commands {
 			// no viable vector for send error response or success ack
 			if cmd.shortcut == evt.Body {

@@ -22,21 +22,22 @@ func (bc Bandcamp) CanHandle(arg string) bool {
 	return err == nil && url.IsAbs() && urlRegexpBc.MatchString(url.Hostname())
 }
 
-func (bc Bandcamp) Resolve(arg string) (*Metadata, error) {
+func (bc Bandcamp) Resolve(arg string) (md Metadata, err error) {
 	resp, err := http.Get(arg)
 	if err != nil {
-		return nil, err
+		return
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		return nil, err
+		return
 	}
 
 	matches := trackinfoRegexp.FindSubmatch(body)
 	if matches == nil || len(matches[1]) == 0 {
-		return nil, errors.New("could not find track info")
+		err = errors.New("could not find track info")
+		return
 	}
 
 	var trackinfoJson struct {
@@ -48,13 +49,13 @@ func (bc Bandcamp) Resolve(arg string) (*Metadata, error) {
 	}
 	err = json.Unmarshal(matches[1], &trackinfoJson)
 	if err != nil {
-		return nil, err
+		return
 	}
 
 	log.Printf("track info %#v", trackinfoJson)
 	// bandcamp reports duration in seconds
 	dur := time.Duration(int(trackinfoJson.Duration*1000)) * time.Millisecond
-	md := &Metadata{
+	md = Metadata{
 		Title:    trackinfoJson.Title,
 		Duration: dur,
 		Open: func() (io.ReadCloser, error) {
@@ -62,5 +63,5 @@ func (bc Bandcamp) Resolve(arg string) (*Metadata, error) {
 			return resp.Body, err
 		},
 	}
-	return md, nil
+	return
 }

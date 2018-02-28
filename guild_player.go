@@ -15,7 +15,7 @@ import (
 var ErrInvalidMusicChannel = errors.New("Set a valid voice channel for music playback, then call reconnect.")
 
 type GuildPlayer interface {
-	Enqueue(evt GuildEvent, voiceChannelID string, md *plugins.Metadata, loudness float64) error
+	Enqueue(evt GuildEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error
 	Skip()
 	Pause()
 	Clear()
@@ -24,8 +24,9 @@ type GuildPlayer interface {
 }
 
 type Play struct {
-	statusMessage *discordgo.Message
-	metadata      *plugins.Metadata
+	statusMessageChannelID string
+	statusMessageID        string
+	metadata               plugins.Metadata
 }
 
 type guildPlayer struct {
@@ -35,7 +36,9 @@ type guildPlayer struct {
 	cmdShortcuts []string
 	wg           sync.WaitGroup
 	mu           sync.Mutex
-	// TODO how to manage statusMessage state in a reasonable way without mutex?
+	// TODO how to manage nowPlaying state in a reasonable way without mutex?
+	// player state controlled by discordvoice#sender goroutine
+	// guild state controlled by musicbot#Guild goroutine
 	nowPlaying Play
 }
 
@@ -53,8 +56,7 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 	}
 }
 
-// TODO don't use nullable metadata
-func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md *plugins.Metadata, loudness float64) error {
+func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error {
 	statusChannelID, statusMessageID := evt.Channel.ID, ""
 	embed := &discordgo.MessageEmbed{}
 	embed.Color = 0xa680ee
@@ -82,8 +84,9 @@ func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md *plugin
 			gp.wg.Add(1)
 			gp.mu.Lock()
 			gp.nowPlaying = Play{
-				statusMessage: msg,
-				metadata:      md,
+				statusMessageChannelID: msg.ChannelID,
+				statusMessageID:        msg.ID,
+				metadata:               md,
 			}
 			gp.mu.Unlock()
 
@@ -158,16 +161,8 @@ func (gp *guildPlayer) Close() {
 func (gp *guildPlayer) NowPlaying() (Play, bool) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
-	if gp.nowPlaying.metadata == nil || gp.nowPlaying.statusMessage == nil {
+	if gp.nowPlaying.statusMessageID == "" {
 		return Play{}, false
 	}
 	return gp.nowPlaying, true
-}
-
-func xvalidVoiceChannel(discord *discordgo.Session, channelID string) bool {
-	channel, err := discord.State.Channel(channelID)
-	if err != nil {
-		channel, err = discord.Channel(channelID)
-	}
-	return err == nil && channel.Type == discordgo.ChannelTypeGuildVoice
 }
