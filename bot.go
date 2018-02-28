@@ -13,6 +13,7 @@ import (
 const defaultCommandPrefix = "#!"
 const defaultMusicChannelPrefix = "music"
 
+// Bot provides resources to and routes events to the appropriate guild service.
 type Bot struct {
 	owner         string
 	me            *discordgo.User
@@ -24,6 +25,7 @@ type Bot struct {
 	guildServices map[string]GuildService
 }
 
+// New starts a musicbot server.
 func New(token string, dbPath string, owner string, soundcloud string) (*Bot, error) {
 	db, err := newBoltGuildStorage(dbPath)
 	if err != nil {
@@ -86,6 +88,7 @@ func New(token string, dbPath string, owner string, soundcloud string) (*Bot, er
 	return b, nil
 }
 
+// Stop closes all services and resources.
 func (b *Bot) Stop() {
 	b.mu.Lock()
 	for _, svc := range b.guildServices {
@@ -96,6 +99,7 @@ func (b *Bot) Stop() {
 	b.mu.Unlock()
 }
 
+// AddGuild registers a new guild service to which discord events may be routed.
 func (b *Bot) AddGuild(guild *discordgo.Guild) {
 	// cleanup existing guild service if exists
 	// e.g. unhandled disconnect, kick and reinvite

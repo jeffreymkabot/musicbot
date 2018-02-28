@@ -12,10 +12,14 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
+// ErrGuildServiceTimeout indicates that a guild service has taken too long to accept an event.
 var ErrGuildServiceTimeout = errors.New("service timed out")
+
+// ErrGuildServiceClosed indicates that a guild service has been closed.
 var ErrGuildServiceClosed = errors.New("service is disposed")
 
 // GuildService handles incoming GuildEvents.
+// Send returns an error if the service is busy or has been closed.
 // Close is idempotent.
 type GuildService interface {
 	Send(GuildEvent) error
@@ -31,8 +35,10 @@ type GuildEvent struct {
 	Body    string
 }
 
+// GuildEventType classifies the source of a GuildEvent.
 type GuildEventType int
 
+// GuildEventTypes
 const (
 	MessageEvent GuildEventType = iota
 	ReactEvent

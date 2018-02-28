@@ -12,8 +12,10 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
-var ErrInvalidMusicChannel = errors.New("Set a valid voice channel for music playback, then call reconnect.")
+// ErrInvalidMusicChannel is emitted when the music channel configured for a guild is not a discord voice channel.
+var ErrInvalidMusicChannel = errors.New("set a valid voice channel for music playback, then call reconnect")
 
+// GuildPlayer streams audio to a voice channel in a guild.
 type GuildPlayer interface {
 	Enqueue(evt GuildEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error
 	Skip()
@@ -23,6 +25,7 @@ type GuildPlayer interface {
 	NowPlaying() (Play, bool)
 }
 
+// Play holds data related to the playback of an audio stream in a guild.
 type Play struct {
 	statusMessageChannelID string
 	statusMessageID        string
@@ -42,6 +45,8 @@ type guildPlayer struct {
 	nowPlaying Play
 }
 
+// NewGuildPlayer creates a GuildPlayer resource for a discord guild.
+// Existing open GuildPlayers for the same guild should be closed before making a new one to avoid interference.
 func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID string, cmdShortcuts []string) GuildPlayer {
 	return &guildPlayer{
 		guildID: guildID,
