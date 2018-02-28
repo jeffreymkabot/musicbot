@@ -49,6 +49,7 @@ func New(token string, dbPath string, owner string, soundcloud string) (*Bot, er
 			reconnect,
 			get,
 			set,
+			setPlayback,
 			setListen,
 			unsetListen,
 		},
@@ -106,7 +107,7 @@ func (b *Bot) AddGuild(guild *discordgo.Guild) {
 
 	// alternative is to lookup guild in database here and resolve idlechannel immediately,
 	// would have to lookup guild twice or pass info into guild fn
-	playerOpener := func(idleChannelID string) GuildPlayer {
+	openPlayer := func(idleChannelID string) GuildPlayer {
 		return NewGuildPlayer(
 			guild.ID,
 			b.discord,
@@ -118,7 +119,7 @@ func (b *Bot) AddGuild(guild *discordgo.Guild) {
 		guild,
 		b.discord,
 		b.db,
-		playerOpener,
+		openPlayer,
 		b.commands,
 		b.plugins,
 	)

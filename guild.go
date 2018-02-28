@@ -105,7 +105,7 @@ func Guild(
 	guild *discordgo.Guild,
 	discord *discordgo.Session,
 	store GuildStorage,
-	playerOpener func(idleChannelID string) GuildPlayer,
+	openPlayer func(idleChannelID string) GuildPlayer,
 	commands []command,
 	plugins []plugins.Plugin,
 ) GuildService {
@@ -128,12 +128,12 @@ func Guild(
 		guildOwnerID: guild.OwnerID,
 		discord:      discord,
 		store:        store,
-		// idle in the music channel
-		// TODO do not provide an empty channel
-		player:   playerOpener(info.MusicChannel),
-		commands: commands,
-		plugins:  plugins,
+		player:       openPlayer(info.MusicChannel),
+		commands:     commands,
+		plugins:      plugins,
 	}
+
+	// guild users will have to correct the playback channel configuration
 
 	gsvc.wg.Add(1)
 	go func() {
@@ -166,33 +166,29 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 
 	args := strings.Fields(strings.TrimPrefix(evt.Body, msgPrefix))
 
-	cmd, args, ok := matchCommand(gsvc.commands, args)
-	if !ok {
+	cmd, args, cmdOK := matchCommand(gsvc.commands, args)
+	if !cmdOK {
 		// possibly synthesize a command for a matching plugin
 		cmd = command{
 			restrictChannel: true,
 			ownerOnly:       false,
 			ack:             "☑",
+			run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+				return nil
+			},
 		}
 	}
 	if !gsvc.isAllowed(cmd, evt) {
 		return
 	}
 	// query plugins _after_ validating the event in order to fail fast
-	if !ok {
-		plugin, ok := matchPlugin(gsvc.plugins, args)
-		if !ok {
+	// since querying some plugins can be slow
+	if !cmdOK {
+		plugin, pluginOK := matchPlugin(gsvc.plugins, args)
+		if !pluginOK {
 			return
 		}
-		cmd.run = func(gsvc *guildService, evt GuildEvent, args []string) error {
-			gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
-			defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
-			md, err := plugin.Resolve(args[0])
-			if err != nil {
-				return err
-			}
-			return gsvc.player.Enqueue(evt, gsvc.MusicChannel, md, gsvc.Loudness)
-		}
+		cmd.run = runPlugin(plugin)
 	}
 
 	err := cmd.run(gsvc, evt, args)
@@ -233,6 +229,15 @@ func detectMusicChannel(g *discordgo.Guild) string {
 	for _, ch := range g.Channels {
 		if ch.Type == discordgo.ChannelTypeGuildVoice && strings.HasPrefix(strings.ToLower(ch.Name), defaultMusicChannelPrefix) {
 			return ch.ID
+		}
+	}
+	return ""
+}
+
+func detectUserVoiceChannel(g *discordgo.Guild, userID string) string {
+	for _, vs := range g.VoiceStates {
+		if vs.UserID == userID {
+			return vs.ChannelID
 		}
 	}
 	return ""

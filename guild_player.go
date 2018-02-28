@@ -12,13 +12,14 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
+var ErrInvalidMusicChannel = errors.New("Set a valid voice channel for music playback, then call reconnect.")
+
 type GuildPlayer interface {
 	Enqueue(evt GuildEvent, voiceChannelID string, md *plugins.Metadata, loudness float64) error
 	Skip()
 	Pause()
 	Clear()
 	Close()
-	// TODO how to manage statusMessage state in a reasonable way without mutex?
 	NowPlaying() (Play, bool)
 }
 
@@ -54,10 +55,6 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 
 // TODO don't use nullable metadata
 func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md *plugins.Metadata, loudness float64) error {
-	if voiceChannelID == "" {
-		return errors.New("set a music voice channel")
-	}
-
 	statusChannelID, statusMessageID := evt.Channel.ID, ""
 	embed := &discordgo.MessageEmbed{}
 	embed.Color = 0xa680ee
@@ -101,7 +98,7 @@ func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md *plugin
 		}
 	}
 
-	return gp.player.Enqueue(
+	err := gp.player.Enqueue(
 		voiceChannelID,
 		md.Title,
 		md.Open,
@@ -135,6 +132,10 @@ func (gp *guildPlayer) Enqueue(evt GuildEvent, voiceChannelID string, md *plugin
 			}
 		}),
 	)
+	if err == dcv.ErrInvalidVoiceChannel {
+		return ErrInvalidMusicChannel
+	}
+	return err
 }
 
 func (gp *guildPlayer) Skip() {
@@ -161,4 +162,12 @@ func (gp *guildPlayer) NowPlaying() (Play, bool) {
 		return Play{}, false
 	}
 	return gp.nowPlaying, true
+}
+
+func xvalidVoiceChannel(discord *discordgo.Session, channelID string) bool {
+	channel, err := discord.State.Channel(channelID)
+	if err != nil {
+		channel, err = discord.Channel(channelID)
+	}
+	return err == nil && channel.Type == discordgo.ChannelTypeGuildVoice
 }

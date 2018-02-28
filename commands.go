@@ -62,6 +62,18 @@ func matchPlugin(plugins []plugins.Plugin, args []string) (plugins.Plugin, bool)
 	return nil, false
 }
 
+func runPlugin(plugin plugins.Plugin) func(gsvc *guildService, evt GuildEvent, args []string) error {
+	return func(gsvc *guildService, evt GuildEvent, args []string) error {
+		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
+		defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
+		md, err := plugin.Resolve(args[0])
+		if err != nil {
+			return err
+		}
+		return gsvc.player.Enqueue(evt, gsvc.MusicChannel, md, gsvc.Loudness)
+	}
+}
+
 func commandByNameOrAlias(commands []command, candidate string) (command, bool) {
 	for _, cmd := range commands {
 		if candidate == cmd.name {
@@ -83,9 +95,6 @@ var reconnect = command{
 	restrictChannel: true,
 	ack:             "🆗",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		if gsvc.MusicChannel == "" {
-			return errors.New("set a music voice channel")
-		}
 		gsvc.player.Close()
 		// idle in the music channel
 		gsvc.player = NewGuildPlayer(
@@ -193,19 +202,17 @@ var get = command{
 	},
 }
 
-// TODO validate musicchannel
-// invalid channel can cause bot to repeatedly disconnect session and get stuck in ready event loop
 // omit value to zero the field
+// deferred call to get.run serves as ack
 var set = command{
-	name:      "set",
-	usage:     "set [field] [value]",
-	long:      "Set preferences for this guild.  Omit [value] to empty the preference.",
-	ack:       "🆗",
-	ownerOnly: true,
+	name:  "set",
+	usage: "set [field] [value]",
+	long:  "Set preferences for this guild.  Omit [value] to empty the preference.",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
 		if len(args) == 0 {
 			return errors.New("field please")
 		}
+		defer get.run(gsvc, evt, args)
 		defer gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
 		info := structs.New(&gsvc.GuildInfo)
 		for _, fld := range info.Fields() {
@@ -238,6 +245,37 @@ func resolveValue(kind reflect.Kind, arg string) (val interface{}, err error) {
 		val, err = nil, errors.New("unsupported type")
 	}
 	return
+}
+
+var setPlayback = command{
+	name:  "playback",
+	usage: "playback [detect|here]",
+	long: "Set the music playback channel for the guild." +
+		"\n`playback` or `playback detect` will look for a voice channel starting with `" + defaultMusicChannelPrefix + "`." +
+		"\n`playback here` will look for the voice channel you are in.",
+	ack: "🆗",
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		guild, err := gsvc.discord.State.Guild(gsvc.guildID)
+		if err != nil {
+			guild, err = gsvc.discord.Guild(gsvc.guildID)
+		}
+		if err != nil {
+			return err
+		}
+
+		channelID := ""
+		if len(args) == 0 || strings.ToLower(args[0]) == "detect" {
+			channelID = detectMusicChannel(guild)
+		} else if strings.ToLower(args[0]) == "here" {
+			channelID = detectUserVoiceChannel(guild, evt.Author.ID)
+		}
+		if channelID == "" {
+			return errors.New("couldn't detect a voice channel")
+		}
+
+		gsvc.MusicChannel = channelID
+		return nil
+	},
 }
 
 var setListen = command{
