@@ -70,7 +70,12 @@ func runPlugin(plugin plugins.Plugin) func(gsvc *guildService, evt GuildEvent, a
 		if err != nil {
 			return err
 		}
-		return gsvc.player.Put(evt, gsvc.MusicChannel, md, gsvc.Loudness)
+		err = gsvc.player.Put(evt, gsvc.MusicChannel, md, gsvc.Loudness)
+		if err == nil {
+			// put a requeue button on the message so users can requeue items that succeeded in the past
+			gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, requeue.shortcut)
+		}
+		return err
 	}
 }
 
@@ -159,6 +164,19 @@ var requeue = command{
 			return errors.New("nothing playing")
 		}
 		return gsvc.player.Put(evt, gsvc.MusicChannel, play.metadata, gsvc.Loudness)
+	},
+}
+
+var playlist = command{
+	name:            "playlist",
+	alias:           []string{"list", "ls", "lst"},
+	usage:           "playlist",
+	long:            "List any queued songs.",
+	restrictChannel: true,
+	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+		playlistString := strings.Join(gsvc.player.Playlist(), "\n")
+		gsvc.discord.ChannelMessageSend(evt.Channel.ID, "```\n"+playlistString+"\n```")
+		return nil
 	},
 }
 

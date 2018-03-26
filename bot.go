@@ -44,6 +44,7 @@ func New(token string, dbPath string, owner string, soundcloud string) (*Bot, er
 		db:      db,
 		commands: []command{
 			help,
+			playlist,
 			pause,
 			skip,
 			clear,

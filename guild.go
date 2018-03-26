@@ -214,13 +214,11 @@ func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
 	return channelOK && authorOK
 }
 
-// act only on reactions placed on the status message
 func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
+	// first check if reaction is to the player status message
+	// otherwise check if it is a reaction to a previously queued song
 	nowPlaying, ok := gsvc.player.NowPlaying()
-	if !ok {
-		return
-	}
-	if evt.Channel.ID == nowPlaying.statusMessageChannelID && evt.Message.ID == nowPlaying.statusMessageID {
+	if ok && evt.Channel.ID == nowPlaying.statusMessageChannelID && evt.Message.ID == nowPlaying.statusMessageID {
 		for _, cmd := range gsvc.commands {
 			// no viable vector for send error response or success ack
 			if cmd.shortcut == evt.Body {
@@ -228,6 +226,21 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 				return
 			}
 		}
+	}
+	// react event does not have full message struct
+	// only able to look back at so many messages, so false negatives are possible
+	msg, err := gsvc.discord.State.Message(evt.Channel.ID, evt.Message.ID)
+	if err != nil {
+		return
+	}
+	if requeueable(*msg) {
+		gsvc.handleMessageEvent(GuildEvent{
+			Type:    MessageEvent,
+			Channel: evt.Channel,
+			Message: *msg,
+			Author:  *msg.Author,
+			Body:    msg.Content,
+		})
 	}
 }
 
@@ -247,6 +260,20 @@ func detectUserVoiceChannel(g *discordgo.Guild, userID string) string {
 		}
 	}
 	return ""
+}
+
+// requeable if not created by me and I reacted to it with the requeue shortcut
+// tolerate false negatives
+func requeueable(msg discordgo.Message) bool {
+	if msg.Author.Bot {
+		return false
+	}
+	for _, rxn := range msg.Reactions {
+		if rxn.Me && rxn.Emoji.Name == requeue.shortcut {
+			return true
+		}
+	}
+	return false
 }
 
 func prettyTime(t time.Duration) string {

@@ -1,10 +1,10 @@
 package music
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +25,7 @@ type GuildPlayer interface {
 	Clear()
 	Close() error
 	NowPlaying() (Play, bool)
+	Playlist() []string
 }
 
 // Play holds data related to the playback of an audio stream in a guild.
@@ -86,7 +87,7 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 			embed.Fields = []*discordgo.MessageEmbedField{
 				&discordgo.MessageEmbedField{
 					Name:  "Playlist",
-					Value: playlist(lst),
+					Value: strings.Join(lst, "\n"),
 				},
 			}
 		}
@@ -158,12 +159,4 @@ func (gp *guildPlayer) NowPlaying() (play Play, ok bool) {
 		return Play{}, false
 	}
 	return gp.nowPlaying, true
-}
-
-func playlist(lst []string) string {
-	buf := &bytes.Buffer{}
-	for _, item := range lst {
-		buf.WriteString(item + "\n")
-	}
-	return buf.String()
 }
