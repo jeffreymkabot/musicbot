@@ -20,7 +20,7 @@ func (tw Twitch) Resolve(arg string) (md Metadata, err error) {
 	md = Metadata{
 		Title:    arg,
 		Duration: 0,
-		Open:     streamlinkOpener(arg, "audio_only,480p,720p,best"),
+		OpenFunc: streamlinkOpener(arg, "audio_only,480p,720p,best"),
 	}
 	return
 }

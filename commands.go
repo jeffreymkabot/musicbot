@@ -70,7 +70,7 @@ func runPlugin(plugin plugins.Plugin) func(gsvc *guildService, evt GuildEvent, a
 		if err != nil {
 			return err
 		}
-		return gsvc.player.Enqueue(evt, gsvc.MusicChannel, md, gsvc.Loudness)
+		return gsvc.player.Put(evt, gsvc.MusicChannel, md, gsvc.Loudness)
 	}
 }
 
@@ -158,7 +158,7 @@ var requeue = command{
 		if !ok {
 			return errors.New("nothing playing")
 		}
-		return gsvc.player.Enqueue(evt, gsvc.MusicChannel, play.metadata, gsvc.Loudness)
+		return gsvc.player.Put(evt, gsvc.MusicChannel, play.metadata, gsvc.Loudness)
 	},
 }
 

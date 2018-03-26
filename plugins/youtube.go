@@ -2,7 +2,6 @@ package plugins
 
 import (
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -30,7 +29,7 @@ func (yt Youtube) Resolve(arg string) (md Metadata, err error) {
 		md = Metadata{
 			Title:    info.Title,
 			Duration: info.Duration,
-			Open:     streamlinkOpener(arg, "480p,720p,best"),
+			OpenFunc: streamlinkOpener(arg, "480p,720p,best"),
 		}
 		return
 	}
@@ -39,12 +38,11 @@ func (yt Youtube) Resolve(arg string) (md Metadata, err error) {
 	if err != nil {
 		return
 	}
-	log.Printf("dl url %s", dlUrl)
 
 	md = Metadata{
 		Title:    info.Title,
 		Duration: info.Duration,
-		Open: func() (io.ReadCloser, error) {
+		OpenFunc: func() (io.ReadCloser, error) {
 			resp, err := http.Get(dlUrl.String())
 			return resp.Body, err
 		},

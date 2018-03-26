@@ -82,7 +82,7 @@ func (sc Soundcloud) Resolve(arg string) (md Metadata, err error) {
 	md = Metadata{
 		Title:    respJSON.Title,
 		Duration: time.Duration(respJSON.Duration) * time.Millisecond,
-		Open: func() (io.ReadCloser, error) {
+		OpenFunc: func() (io.ReadCloser, error) {
 			resp, err := http.Get(dlUrl + "?" + query.Encode())
 			return resp.Body, err
 		},

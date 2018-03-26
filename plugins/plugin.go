@@ -16,7 +16,7 @@ type Plugin interface {
 type Metadata struct {
 	Title    string
 	Duration time.Duration
-	Open     func() (io.ReadCloser, error)
+	OpenFunc func() (io.ReadCloser, error)
 }
 
 // Streamlink is a generic plugin capable of handling a large variety of urls.
@@ -42,7 +42,7 @@ func (sl Streamlink) Resolve(arg string) (md Metadata, err error) {
 		Title:    arg,
 		Duration: 0,
 		// guess at the name of audio only streams that might be available
-		Open: streamlinkOpener(arg, "audio,audio_only,480p,720p,best"),
+		OpenFunc: streamlinkOpener(arg, "audio,audio_only,480p,720p,best"),
 	}
 	return
 }
