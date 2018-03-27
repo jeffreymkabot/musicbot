@@ -22,7 +22,7 @@ func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
 
 func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 	return func(session *discordgo.Session, gc *discordgo.GuildCreate) {
-		log.Printf("guild create %v", gc.Guild.ID)
+		log.Printf("add guild %v", gc.Guild.ID)
 		b.AddGuild(gc.Guild)
 	}
 }

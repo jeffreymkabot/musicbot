@@ -3,6 +3,7 @@ package music
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -19,11 +20,11 @@ var ErrGuildServiceTimeout = errors.New("service timed out")
 var ErrGuildServiceClosed = errors.New("service is disposed")
 
 // GuildService handles incoming GuildEvents.
-// Send returns an error if the service is busy or has been closed.
-// Close is idempotent.
+// Send returns an error if the service has been closed or otherwise cannot process the event.
+// Close is idempotent, but calls to close after the first may return an error.
 type GuildService interface {
 	Send(GuildEvent) error
-	Close()
+	Close() error
 }
 
 // GuildEvent provides instructions to a GuildService.
@@ -33,6 +34,11 @@ type GuildEvent struct {
 	Message discordgo.Message
 	Author  discordgo.User
 	Body    string
+}
+
+func (evt GuildEvent) String() string {
+	return fmt.Sprintf("Guild:%v|Channel:%v|Author:%v|Body:%v",
+		evt.Channel.GuildID, evt.Channel.ID, evt.Author.ID, evt.Body)
 }
 
 // GuildEventType classifies the source of a GuildEvent.
@@ -61,7 +67,7 @@ func (svc *syncGuildService) Send(evt GuildEvent) error {
 	return nil
 }
 
-func (svc *syncGuildService) Close() {
+func (svc *syncGuildService) Close() error {
 	select {
 	case <-svc.closed:
 	default:
@@ -69,6 +75,7 @@ func (svc *syncGuildService) Close() {
 		close(svc.eventChan)
 		svc.wg.Wait()
 	}
+	return nil
 }
 
 type guildService struct {
@@ -161,20 +168,20 @@ func Guild(
 
 // act only on messages beginning with an appropriate prefix in an appropriate channel by an appropriate user
 func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
-	msgPrefix := ""
+	trimTarget := ""
 	if strings.HasPrefix(evt.Body, gsvc.Prefix) {
-		msgPrefix = gsvc.Prefix
+		trimTarget = gsvc.Prefix
 	} else if strings.HasPrefix(evt.Body, defaultCommandPrefix) {
-		msgPrefix = defaultCommandPrefix
+		trimTarget = defaultCommandPrefix
 	} else {
 		return
 	}
 
-	args := strings.Fields(strings.TrimPrefix(evt.Body, msgPrefix))
+	args := strings.Fields(strings.TrimPrefix(evt.Body, trimTarget))
 
 	cmd, args, cmdOK := matchCommand(gsvc.commands, args)
 	if !cmdOK {
-		// possibly synthesize a command for a matching plugin
+		// synthesize a command function for a matching plugin, if event is valid
 		cmd = command{
 			restrictChannel: true,
 			ownerOnly:       false,
@@ -194,8 +201,11 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 		if !pluginOK {
 			return
 		}
+		cmd.name = args[0]
 		cmd.run = runPlugin(plugin)
 	}
+
+	log.Printf("evt %v -> command %v", evt, cmd.name)
 
 	err := cmd.run(gsvc, evt, args)
 	// write error response or react with success ack

@@ -70,12 +70,7 @@ func runPlugin(plugin plugins.Plugin) func(gsvc *guildService, evt GuildEvent, a
 		if err != nil {
 			return err
 		}
-		err = gsvc.player.Put(evt, gsvc.MusicChannel, md, gsvc.Loudness)
-		if err == nil {
-			// put a requeue button on the message so users can requeue items that succeeded in the past
-			gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, requeue.shortcut)
-		}
-		return err
+		return gsvc.player.Put(evt, gsvc.MusicChannel, md, gsvc.Loudness)
 	}
 }
 

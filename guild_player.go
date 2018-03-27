@@ -68,6 +68,7 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 }
 
 func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error {
+	log.Printf("put %v", md.Title)
 	statusChannelID, statusMessageID := evt.Channel.ID, ""
 	embed := &discordgo.MessageEmbed{
 		Color:  0xa680ee,
@@ -144,8 +145,10 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 				gp.nowPlaying = Play{}
 				gp.mu.Unlock()
 			}
+			gp.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, requeue.shortcut)
 		}),
 	)
+	log.Printf("put err %v", err)
 	if err == discordvoice.ErrInvalidVoiceChannel {
 		return ErrInvalidMusicChannel
 	}
