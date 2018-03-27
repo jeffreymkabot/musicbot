@@ -237,11 +237,13 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 			}
 		}
 	}
-	// react event does not have full message struct
-	// only able to look back at so many messages, so false negatives are possible
+	// react event does not have full message struct, try to recover the message
 	msg, err := gsvc.discord.State.Message(evt.Channel.ID, evt.Message.ID)
 	if err != nil {
-		return
+		msg, err = gsvc.discord.ChannelMessage(evt.Channel.ID, evt.Message.ID)
+		if err != nil {
+			return
+		}
 	}
 	if requeueable(*msg) {
 		gsvc.handleMessageEvent(GuildEvent{
