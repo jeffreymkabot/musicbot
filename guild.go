@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -286,49 +285,6 @@ func requeueable(msg discordgo.Message) bool {
 		}
 	}
 	return false
-}
-
-func prettyTime(t time.Duration) string {
-	hours := int(t.Hours())
-	min := int(t.Minutes()) % 60
-	sec := int(t.Seconds()) % 60
-	if hours >= 1 {
-		return fmt.Sprintf("%02v:%02v:%02v", hours, min, sec)
-	}
-	return fmt.Sprintf("%02v:%02v", min, sec)
-}
-
-// frame-to-frame latency in milliseconds
-func latencies(times []time.Time) []float64 {
-	latencies := make([]float64, len(times)-1)
-	for i := 1; i < len(times); i++ {
-		latencies[i-1] = float64(times[i].Sub(times[i-1]).Nanoseconds()) / 1e6
-	}
-	return latencies
-}
-
-func statistics(data []float64) (avg float64, dev float64, max float64, min float64) {
-	if len(data) == 0 {
-		return
-	}
-	min = math.MaxFloat64
-	sum := 0.0
-	for _, v := range data {
-		if v < min {
-			min = v
-		}
-		if v > max {
-			max = v
-		}
-		sum += v
-	}
-	avg = sum / float64(len(data))
-	for _, v := range data {
-		dev += ((v - avg) * (v - avg))
-	}
-	dev = dev / float64(len(data))
-	dev = math.Sqrt(dev)
-	return
 }
 
 func contains(s []string, t string) bool {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,10 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 }
 
 func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error {
+	if !discordvoice.ValidVoiceChannel(gp.discord, voiceChannelID) {
+		return ErrInvalidMusicChannel
+	}
+
 	log.Printf("put %v", md.Title)
 	statusChannelID, statusMessageID := evt.Channel.ID, ""
 	embed := &discordgo.MessageEmbed{
@@ -114,12 +119,17 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 					log.Printf("failed to attach cmd shortcut to player status %v", err)
 				}
 			}
-		} else if _, err := gp.discord.ChannelMessageEditEmbed(statusChannelID, statusMessageID, embed); err != nil {
-			log.Printf("failed to refresh player status %v", err)
+		} else {
+			go func() {
+				_, err := gp.discord.ChannelMessageEditEmbed(statusChannelID, statusMessageID, embed)
+				if err != nil {
+					log.Printf("failed to refresh player status %v", err)
+				}
+			}()
 		}
 	}
 
-	err := gp.Enqueue(
+	return gp.Enqueue(
 		voiceChannelID,
 		md.Title,
 		md.OpenFunc,
@@ -129,8 +139,8 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 		player.OnPause(func(d time.Duration) { refreshStatus(false, d, gp.Playlist()) }),
 		player.OnResume(func(d time.Duration) { refreshStatus(true, d, gp.Playlist()) }),
 		player.OnProgress(
-			func(d time.Duration, frames []time.Time) {
-				avg, dev, max, min := statistics(latencies(frames))
+			func(d time.Duration, frameTimes []time.Duration) {
+				avg, dev, max, min := statistics(latenciesAsFloat(frameTimes))
 				embed.Footer.Text = fmt.Sprintf("avg %.3fms, dev %.3fms, max %.3fms, min %.3fms", avg, dev, max, min)
 				refreshStatus(true, d, gp.Playlist())
 			},
@@ -148,11 +158,6 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 			gp.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, requeue.shortcut)
 		}),
 	)
-	log.Printf("put err %v", err)
-	if err == discordvoice.ErrInvalidVoiceChannel {
-		return ErrInvalidMusicChannel
-	}
-	return err
 }
 
 func (gp *guildPlayer) NowPlaying() (play Play, ok bool) {
@@ -162,4 +167,47 @@ func (gp *guildPlayer) NowPlaying() (play Play, ok bool) {
 		return Play{}, false
 	}
 	return gp.nowPlaying, true
+}
+
+func prettyTime(t time.Duration) string {
+	hours := int(t.Hours())
+	min := int(t.Minutes()) % 60
+	sec := int(t.Seconds()) % 60
+	if hours >= 1 {
+		return fmt.Sprintf("%02v:%02v:%02v", hours, min, sec)
+	}
+	return fmt.Sprintf("%02v:%02v", min, sec)
+}
+
+// frame-to-frame latency in milliseconds
+func latenciesAsFloat(ftf []time.Duration) []float64 {
+	latencies := make([]float64, len(ftf))
+	for idx, f := range ftf {
+		latencies[idx] = float64(f.Nanoseconds()) / 1e6
+	}
+	return latencies
+}
+
+func statistics(data []float64) (avg float64, dev float64, max float64, min float64) {
+	if len(data) == 0 {
+		return
+	}
+	min = math.MaxFloat64
+	sum := 0.0
+	for _, v := range data {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+		sum += v
+	}
+	avg = sum / float64(len(data))
+	for _, v := range data {
+		dev += ((v - avg) * (v - avg))
+	}
+	dev = dev / float64(len(data))
+	dev = math.Sqrt(dev)
+	return
 }

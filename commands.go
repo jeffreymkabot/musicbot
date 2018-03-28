@@ -2,7 +2,6 @@ package music
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -13,6 +12,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/fatih/structs"
 	"github.com/jeffreymkabot/musicbot/plugins"
+	"github.com/pkg/errors"
 )
 
 type command struct {
@@ -68,7 +68,7 @@ func runPlugin(plugin plugins.Plugin) func(gsvc *guildService, evt GuildEvent, a
 		defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
 		md, err := plugin.Resolve(args[0])
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to resolve openable stream")
 		}
 		return gsvc.player.Put(evt, gsvc.MusicChannel, md, gsvc.Loudness)
 	}
