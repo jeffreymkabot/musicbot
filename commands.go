@@ -66,7 +66,8 @@ func runPlugin(plugin plugins.Plugin) func(gsvc *guildService, evt GuildEvent, a
 	return func(gsvc *guildService, evt GuildEvent, args []string) error {
 		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
 		defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
-		md, err := plugin.Resolve(args[0])
+
+		md, err := plugin.Resolve(strings.Join(args, " "))
 		if err != nil {
 			return errors.Wrap(err, "failed to resolve openable stream")
 		}

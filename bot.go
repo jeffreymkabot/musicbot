@@ -3,6 +3,7 @@ package music
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"sync"
 
 	"github.com/boltdb/bolt"
@@ -15,7 +16,6 @@ const defaultMusicChannelPrefix = "music"
 
 // Bot provides resources to and routes events to the appropriate guild service.
 type Bot struct {
-	owner         string
 	me            *discordgo.User
 	discord       *discordgo.Session
 	db            *boltGuildStorage
@@ -26,7 +26,7 @@ type Bot struct {
 }
 
 // New starts a musicbot server.
-func New(token string, dbPath string, owner string, soundcloud string) (*Bot, error) {
+func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, error) {
 	db, err := newBoltGuildStorage(dbPath)
 	if err != nil {
 		return nil, err
@@ -39,7 +39,6 @@ func New(token string, dbPath string, owner string, soundcloud string) (*Bot, er
 	discord.LogLevel = discordgo.LogWarning
 
 	b := &Bot{
-		owner:   owner,
 		discord: discord,
 		db:      db,
 		commands: []command{
@@ -61,10 +60,17 @@ func New(token string, dbPath string, owner string, soundcloud string) (*Bot, er
 			plugins.Soundcloud{ClientID: soundcloud},
 			plugins.Twitch{},
 			plugins.Bandcamp{},
-			plugins.Streamlink{},
 		},
 		guildServices: make(map[string]GuildService),
 	}
+
+	youtubeSearch, err := plugins.NewYoutubeService(youtube)
+	if err == nil {
+		b.plugins = append(b.plugins, youtubeSearch)
+	} else {
+		log.Printf("failed to acquire youtube service %v", err)
+	}
+	b.plugins = append(b.plugins, plugins.Streamlink{})
 
 	discord.AddHandler(onGuildCreate(b))
 	discord.AddHandler(onMessageCreate(b))

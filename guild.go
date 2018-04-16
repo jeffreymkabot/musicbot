@@ -194,7 +194,7 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 		return
 	}
 	// query plugins _after_ validating the event in order to fail fast
-	// since querying some plugins can be slow
+	// querying some plugins can be slow
 	if !cmdOK {
 		plugin, pluginOK := matchPlugin(gsvc.plugins, args)
 		if !pluginOK {
