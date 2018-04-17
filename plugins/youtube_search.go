@@ -15,7 +15,7 @@ type YoutubeSearch struct {
 	service *youtube.Service
 }
 
-func NewYoutubeService(apikey string) (*YoutubeSearch, error) {
+func NewYoutubeSearch(apikey string) (*YoutubeSearch, error) {
 	client := &http.Client{
 		Transport: &transport.APIKey{Key: apikey},
 	}

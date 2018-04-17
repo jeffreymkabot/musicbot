@@ -64,7 +64,7 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 		guildServices: make(map[string]GuildService),
 	}
 
-	youtubeSearch, err := plugins.NewYoutubeService(youtube)
+	youtubeSearch, err := plugins.NewYoutubeSearch(youtube)
 	if err == nil {
 		b.plugins = append(b.plugins, youtubeSearch)
 	} else {
