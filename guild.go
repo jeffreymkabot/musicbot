@@ -166,6 +166,7 @@ func Guild(
 }
 
 // act only on messages beginning with an appropriate prefix in an appropriate channel by an appropriate user
+// match message against commands, then against plugins if no match against commands
 func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 	trimTarget := ""
 	if strings.HasPrefix(evt.Body, gsvc.Prefix) {
@@ -176,51 +177,48 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 		return
 	}
 
-	args := strings.Fields(strings.TrimPrefix(evt.Body, trimTarget))
+	arg := strings.TrimPrefix(evt.Body, trimTarget)
 
-	cmd, args, cmdOK := matchCommand(gsvc.commands, args)
-	if !cmdOK {
-		// synthesize a command function for a matching plugin, if event is valid
-		cmd = command{
-			restrictChannel: true,
-			ownerOnly:       false,
-			ack:             "☑",
-			run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-				return nil
-			},
+	cmd, argv, cmdOK := matchCommand(gsvc.commands, arg)
+	if cmdOK {
+		if gsvc.isAllowed(cmd, evt) {
+			log.Printf("evt %v -> command %v", evt, cmd.name)
+			gsvc.runAndRespondToMessage(cmd.run, evt, argv, cmd.ack)
 		}
-	}
-	if !gsvc.isAllowed(cmd, evt) {
 		return
 	}
-	// query plugins _after_ validating the event in order to fail fast
-	// querying some plugins can be slow
-	if !cmdOK {
-		plugin, pluginOK := matchPlugin(gsvc.plugins, args)
-		if !pluginOK {
-			return
-		}
-		cmd.name = args[0]
-		cmd.run = runPlugin(plugin)
-	}
 
-	log.Printf("evt %v -> command %v", evt, cmd.name)
-
-	err := cmd.run(gsvc, evt, args)
-	// write error response or react with success ack
-	if err != nil {
-		gsvc.discord.ChannelMessageSend(evt.Channel.ID, fmt.Sprintf("🤔...\n%v", err))
+	// query plugins, but validate event first to fail fast
+	if !gsvc.isAllowed(command{restrictChannel: true}, evt) {
 		return
 	}
-	if cmd.ack != "" {
-		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, cmd.ack)
+
+	f, pluginOK := matchPlugin(gsvc.plugins, arg)
+	if !pluginOK {
+		return
 	}
+
+	log.Printf("evt %v -> plugin %v", evt, arg)
+	gsvc.runAndRespondToMessage(f, evt, nil, requeue.ack)
 }
 
 func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
 	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.Channel.ID)
 	authorOK := !cmd.ownerOnly || evt.Message.Author.ID == gsvc.guildOwnerID
 	return channelOK && authorOK
+}
+
+func (gsvc *guildService) runAndRespondToMessage(f responseFunc, evt GuildEvent, args []string, ack string) {
+	err := f(gsvc, evt, args)
+	// error response
+	if err != nil {
+		gsvc.discord.ChannelMessageSend(evt.Channel.ID, fmt.Sprintf("🤔...\n%v", err))
+		return
+	}
+	// success ack
+	if ack != "" {
+		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, ack)
+	}
 }
 
 func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {

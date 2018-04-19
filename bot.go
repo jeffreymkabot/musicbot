@@ -60,17 +60,23 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 			plugins.Soundcloud{ClientID: soundcloud},
 			plugins.Twitch{},
 			plugins.Bandcamp{},
+			plugins.Streamlink{},
 		},
 		guildServices: make(map[string]GuildService),
 	}
 
+	search := plugins.SearchMultiple{
+		Resources: []plugins.Plugin{
+			plugins.SoundcloudSearch{ClientID: soundcloud},
+		},
+	}
 	youtubeSearch, err := plugins.NewYoutubeSearch(youtube)
 	if err == nil {
-		b.plugins = append(b.plugins, youtubeSearch)
+		search.Resources = append(search.Resources, youtubeSearch)
 	} else {
 		log.Printf("failed to acquire youtube service %v", err)
 	}
-	b.plugins = append(b.plugins, plugins.Streamlink{})
+	b.plugins = append(b.plugins, search)
 
 	discord.AddHandler(onGuildCreate(b))
 	discord.AddHandler(onMessageCreate(b))

@@ -26,11 +26,11 @@ func NewYoutubeSearch(apikey string) (*YoutubeSearch, error) {
 	return &YoutubeSearch{service: svc}, nil
 }
 
-func (yts *YoutubeSearch) CanHandle(arg string) bool {
+func (yts YoutubeSearch) CanHandle(arg string) bool {
 	return arg != "" && !httpRegexp.MatchString(arg)
 }
 
-func (yts *YoutubeSearch) Resolve(arg string) (md Metadata, err error) {
+func (yts YoutubeSearch) Resolve(arg string) (md Metadata, err error) {
 	call := yts.service.Search.List("snippet").
 		Type("video").
 		MaxResults(1).

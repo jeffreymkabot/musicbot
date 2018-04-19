@@ -15,59 +15,62 @@ import (
 	"github.com/pkg/errors"
 )
 
+type responseFunc func(*guildService, GuildEvent, []string) error
+
 type command struct {
 	name  string
 	alias []string
 	usage string // should at least have usage
 	short string
 	long  string
-	// only run for the owner of the bot
+	// only run for the owner of the guild
 	ownerOnly bool
 	// only run in a guild's whitelisted channels
 	restrictChannel bool
 	ack             string // must be an emoji, used to react on success
 	shortcut        string // must be an emoji, users can react to the status message to invoke this command
-	run             func(*guildService, GuildEvent, []string) error
+	run             responseFunc
 }
 
 // determine what to do in response to the provided arguments
 // bool return will be false for no match
 // e.g. cmd, args, ok := matchCommand(argv)
-func matchCommand(available []command, args []string) (command, []string, bool) {
-	if len(args) == 0 {
-		return command{}, args, false
+func matchCommand(available []command, arg string) (command, []string, bool) {
+	argv := strings.Fields(arg)
+	if len(argv) == 0 {
+		return command{}, nil, false
 	}
 
-	candidateCmd := strings.ToLower(args[0])
+	candidateCmd := strings.ToLower(argv[0])
 	if cmd, ok := commandByNameOrAlias(available, candidateCmd); ok {
-		return cmd, args[1:], true
+		return cmd, argv[1:], true
 	}
 
-	return command{}, args, false
+	return command{}, nil, false
 }
 
 // determine a plugin that can handle the provided arguments
 // bool return will be false for no match
-func matchPlugin(plugins []plugins.Plugin, args []string) (plugins.Plugin, bool) {
-	if len(args) == 0 {
+func matchPlugin(plugins []plugins.Plugin, arg string) (responseFunc, bool) {
+	if arg == "" {
 		return nil, false
 	}
 
 	for _, pl := range plugins {
-		if pl.CanHandle(args[0]) {
-			return pl, true
+		if pl.CanHandle(arg) {
+			return runPlugin(pl, arg), true
 		}
 	}
 
 	return nil, false
 }
 
-func runPlugin(plugin plugins.Plugin) func(gsvc *guildService, evt GuildEvent, args []string) error {
-	return func(gsvc *guildService, evt GuildEvent, args []string) error {
+func runPlugin(plugin plugins.Plugin, arg string) responseFunc {
+	return func(gsvc *guildService, evt GuildEvent, _ []string) error {
 		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
 		defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
 
-		md, err := plugin.Resolve(strings.Join(args, " "))
+		md, err := plugin.Resolve(arg)
 		if err != nil {
 			return errors.Wrap(err, "failed to resolve openable stream")
 		}

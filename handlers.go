@@ -75,8 +75,8 @@ func onDirectMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chan
 		Author:  *message.Author,
 		Body:    message.Content,
 	}
-	args := strings.Fields(strings.TrimPrefix(evt.Message.Content, defaultCommandPrefix))
-	cmd, parsedArgs, ok := matchCommand(b.commands, args)
+	arg := strings.TrimPrefix(evt.Message.Content, defaultCommandPrefix)
+	cmd, argv, ok := matchCommand(b.commands, arg)
 	// help command gets a synthetic guild service, _just_ what is needed to run
 	gsvc := &guildService{
 		discord:  b.discord,
@@ -84,10 +84,10 @@ func onDirectMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chan
 	}
 	if !ok {
 		help.run(gsvc, evt, nil)
-	} else if cmd.name != help.name {
-		help.run(gsvc, evt, args)
+	} else if cmd.name == help.name {
+		help.run(gsvc, evt, argv)
 	} else {
-		help.run(gsvc, evt, parsedArgs)
+		help.run(gsvc, evt, strings.Fields(arg))
 	}
 }
 
