@@ -42,6 +42,7 @@ func main() {
 	sig := <-c
 	switch sig {
 	case os.Interrupt:
+		log.Print("SIGINT")
 		return
 	case os.Kill:
 		os.Exit(1)

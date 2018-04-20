@@ -135,7 +135,9 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 		md.OpenFunc,
 		player.Duration(md.Duration),
 		player.Loudness(loudness),
-		player.OnStart(func() { refreshStatus(true, 0, gp.Playlist()) }),
+		player.OnStart(func() {
+			refreshStatus(true, 0, gp.Playlist())
+		}),
 		player.OnPause(func(d time.Duration) { refreshStatus(false, d, gp.Playlist()) }),
 		player.OnResume(func(d time.Duration) { refreshStatus(true, d, gp.Playlist()) }),
 		player.OnProgress(

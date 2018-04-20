@@ -15,7 +15,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-type responseFunc func(*guildService, GuildEvent, []string) error
+type serviceFunc func(*guildService, GuildEvent, []string) error
 
 type command struct {
 	name  string
@@ -29,7 +29,7 @@ type command struct {
 	restrictChannel bool
 	ack             string // must be an emoji, used to react on success
 	shortcut        string // must be an emoji, users can react to the status message to invoke this command
-	run             responseFunc
+	run             serviceFunc
 }
 
 // determine what to do in response to the provided arguments
@@ -51,7 +51,7 @@ func matchCommand(available []command, arg string) (command, []string, bool) {
 
 // determine a plugin that can handle the provided arguments
 // bool return will be false for no match
-func matchPlugin(plugins []plugins.Plugin, arg string) (responseFunc, bool) {
+func matchPlugin(plugins []plugins.Plugin, arg string) (serviceFunc, bool) {
 	if arg == "" {
 		return nil, false
 	}
@@ -65,7 +65,7 @@ func matchPlugin(plugins []plugins.Plugin, arg string) (responseFunc, bool) {
 	return nil, false
 }
 
-func runPlugin(plugin plugins.Plugin, arg string) responseFunc {
+func runPlugin(plugin plugins.Plugin, arg string) serviceFunc {
 	return func(gsvc *guildService, evt GuildEvent, _ []string) error {
 		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
 		defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")

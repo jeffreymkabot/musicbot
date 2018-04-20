@@ -34,6 +34,7 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 
 	discord, err := discordgo.New("Bot " + token)
 	if err != nil {
+		db.Close()
 		return nil, err
 	}
 	discord.LogLevel = discordgo.LogWarning
@@ -152,10 +153,15 @@ func newBoltGuildStorage(dbPath string) (*boltGuildStorage, error) {
 		return nil, err
 	}
 
-	if err := db.Update(func(tx *bolt.Tx) error {
+	err = db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte("guilds"))
+		if err != nil {
+			return err
+		}
+		_, err = tx.CreateBucketIfNotExists([]byte("songs"))
 		return err
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &boltGuildStorage{db}, nil

@@ -49,15 +49,15 @@ const (
 	ReactEvent
 )
 
-type syncGuildService struct {
-	eventChan chan<- GuildEvent
-	wg        sync.WaitGroup
-	closed    chan struct{}
+type guildListener struct {
+	events chan<- GuildEvent
+	wg     sync.WaitGroup
+	closed chan struct{}
 }
 
-func (svc *syncGuildService) Send(evt GuildEvent) error {
+func (svc *guildListener) Send(evt GuildEvent) error {
 	select {
-	case svc.eventChan <- evt:
+	case svc.events <- evt:
 	case <-svc.closed:
 		return ErrGuildServiceClosed
 	case <-time.After(1 * time.Second):
@@ -66,19 +66,19 @@ func (svc *syncGuildService) Send(evt GuildEvent) error {
 	return nil
 }
 
-func (svc *syncGuildService) Close() error {
+func (svc *guildListener) Close() error {
 	select {
 	case <-svc.closed:
+		return ErrGuildServiceClosed
 	default:
-		close(svc.closed)
-		close(svc.eventChan)
-		svc.wg.Wait()
 	}
+	close(svc.closed)
+	close(svc.events)
+	svc.wg.Wait()
 	return nil
 }
 
 type guildService struct {
-	syncGuildService
 	GuildInfo
 	guildID      string
 	guildOwnerID string
@@ -120,35 +120,37 @@ func Guild(
 	openPlayer func(idleChannelID string) GuildPlayer,
 	commands []command,
 	plugins []plugins.Plugin,
-) GuildService {
-	info, err := store.Get(guild.ID)
-	if err != nil {
-		info = defaultGuildInfo
-		info.MusicChannel = detectMusicChannel(guild)
-		store.Put(guild.ID, info)
-	}
-
+) *guildListener {
 	eventChan := make(chan GuildEvent)
-	gsvc := &guildService{
-		syncGuildService: syncGuildService{
-			eventChan: eventChan,
-			wg:        sync.WaitGroup{},
-			closed:    make(chan struct{}),
-		},
-		GuildInfo:    info,
-		guildID:      guild.ID,
-		guildOwnerID: guild.OwnerID,
-		discord:      discord,
-		store:        store,
-		player:       openPlayer(info.MusicChannel),
-		commands:     commands,
-		plugins:      plugins,
+	listener := &guildListener{
+		events: eventChan,
+		wg:     sync.WaitGroup{},
+		closed: make(chan struct{}),
 	}
 
-	// guild users will have to correct the playback channel configuration
+	// initialize guild service in a separate goroutine
+	// so that the Guild function does not block while the guild service initializes
+	// hold the mutex on the bot's guildServices map for as short a time as possible
 
-	gsvc.wg.Add(1)
-	go func() {
+	// listener will wait for the guild service to close its resources
+	listener.wg.Add(1)
+	go func(events <-chan GuildEvent) {
+		info, err := store.Get(guild.ID)
+		if err != nil {
+			info = defaultGuildInfo
+			info.MusicChannel = detectMusicChannel(guild)
+			store.Put(guild.ID, info)
+		}
+		gsvc := &guildService{
+			GuildInfo:    info,
+			guildID:      guild.ID,
+			guildOwnerID: guild.OwnerID,
+			discord:      discord,
+			store:        store,
+			player:       openPlayer(info.MusicChannel),
+			commands:     commands,
+			plugins:      plugins,
+		}
 		for evt := range eventChan {
 			switch evt.Type {
 			case MessageEvent:
@@ -159,25 +161,26 @@ func Guild(
 		}
 		gsvc.player.Close()
 		gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
-		gsvc.wg.Done()
-	}()
+		listener.wg.Done()
+	}(eventChan)
 
-	return gsvc
+	return listener
 }
 
 // act only on messages beginning with an appropriate prefix in an appropriate channel by an appropriate user
 // match message against commands, then against plugins if no match against commands
 func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
-	trimTarget := ""
+	prefix := ""
 	if strings.HasPrefix(evt.Body, gsvc.Prefix) {
-		trimTarget = gsvc.Prefix
+		prefix = gsvc.Prefix
 	} else if strings.HasPrefix(evt.Body, defaultCommandPrefix) {
-		trimTarget = defaultCommandPrefix
-	} else {
+		prefix = defaultCommandPrefix
+	}
+	if prefix == "" {
 		return
 	}
 
-	arg := strings.TrimPrefix(evt.Body, trimTarget)
+	arg := strings.TrimPrefix(evt.Body, prefix)
 
 	cmd, argv, cmdOK := matchCommand(gsvc.commands, arg)
 	if cmdOK {
@@ -208,7 +211,7 @@ func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
 	return channelOK && authorOK
 }
 
-func (gsvc *guildService) runAndRespondToMessage(f responseFunc, evt GuildEvent, args []string, ack string) {
+func (gsvc *guildService) runAndRespondToMessage(f serviceFunc, evt GuildEvent, args []string, ack string) {
 	err := f(gsvc, evt, args)
 	// error response
 	if err != nil {
