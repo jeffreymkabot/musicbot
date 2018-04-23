@@ -180,7 +180,7 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 		return
 	}
 
-	arg := strings.TrimPrefix(evt.Body, prefix)
+	arg := strings.TrimSpace(strings.TrimPrefix(evt.Body, prefix))
 
 	cmd, argv, cmdOK := matchCommand(gsvc.commands, arg)
 	if cmdOK {

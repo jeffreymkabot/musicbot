@@ -60,7 +60,7 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 		guildID: guildID,
 		discord: discord,
 		Player: player.New(
-			discordvoice.NewWriterOpener(discord, guildID, 300*time.Millisecond),
+			discordvoice.New(discord, guildID, 150*time.Millisecond),
 			player.QueueLength(10),
 			player.IdleFunc(idle, 1000),
 		),
