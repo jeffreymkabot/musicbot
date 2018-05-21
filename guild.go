@@ -28,16 +28,20 @@ type GuildService interface {
 
 // GuildEvent provides instructions to a GuildService.
 type GuildEvent struct {
-	Type    GuildEventType
-	Channel discordgo.Channel
-	Message discordgo.Message
-	Author  discordgo.User
-	Body    string
+	Type      GuildEventType
+	GuildID   string
+	ChannelID string
+	MessageID string
+	AuthorID  string
+	// Channel   discordgo.Channel
+	// Message   discordgo.Message
+	// Author    discordgo.User
+	Body string
 }
 
 func (evt GuildEvent) String() string {
 	return fmt.Sprintf("Guild:%v|Channel:%v|Author:%v|Body:%v",
-		evt.Channel.GuildID, evt.Channel.ID, evt.Author.ID, evt.Body)
+		evt.GuildID, evt.ChannelID, evt.AuthorID, evt.Body)
 }
 
 // GuildEventType classifies the source of a GuildEvent.
@@ -205,8 +209,8 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 }
 
 func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
-	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.Channel.ID)
-	authorOK := !cmd.ownerOnly || evt.Message.Author.ID == gsvc.guildOwnerID
+	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.ChannelID)
+	authorOK := !cmd.ownerOnly || evt.AuthorID == gsvc.guildOwnerID
 	return channelOK && authorOK
 }
 
@@ -214,12 +218,12 @@ func (gsvc *guildService) runAndRespondToMessage(fn serviceFunc, evt GuildEvent,
 	err := fn(gsvc, evt, args)
 	// error response
 	if err != nil {
-		gsvc.discord.ChannelMessageSend(evt.Channel.ID, fmt.Sprintf("🤔...\n%v", err))
+		gsvc.discord.ChannelMessageSend(evt.ChannelID, fmt.Sprintf("🤔...\n%v", err))
 		return
 	}
 	// success ack
 	if ack != "" {
-		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, ack)
+		gsvc.discord.MessageReactionAdd(evt.ChannelID, evt.MessageID, ack)
 	}
 }
 
@@ -227,7 +231,7 @@ func (gsvc *guildService) runAndRespondToMessage(fn serviceFunc, evt GuildEvent,
 // otherwise check if it is a requeue reaction to a previously queued song
 func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 	nowPlaying, ok := gsvc.player.NowPlaying()
-	if ok && evt.Channel.ID == nowPlaying.statusMessageChannelID && evt.Message.ID == nowPlaying.statusMessageID {
+	if ok && evt.ChannelID == nowPlaying.statusMessageChannelID && evt.MessageID == nowPlaying.statusMessageID {
 		for _, cmd := range gsvc.commands {
 			if cmd.shortcut == evt.Body {
 				// no error response or success ack
@@ -242,21 +246,23 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 	}
 
 	// react event does not have full message struct, try to recover the message
-	msg, err := gsvc.discord.State.Message(evt.Channel.ID, evt.Message.ID)
+	msg, err := gsvc.discord.State.Message(evt.ChannelID, evt.MessageID)
 	if err != nil {
-		msg, err = gsvc.discord.ChannelMessage(evt.Channel.ID, evt.Message.ID)
+		msg, err = gsvc.discord.ChannelMessage(evt.ChannelID, evt.MessageID)
 		if err != nil {
 			return
 		}
 	}
 
 	if requeueable(msg) {
+		// behave as though the reacted message event happened again
 		gsvc.handleMessageEvent(GuildEvent{
-			Type:    MessageEvent,
-			Channel: evt.Channel,
-			Message: *msg,
-			Author:  *msg.Author,
-			Body:    msg.Content,
+			Type:      MessageEvent,
+			GuildID:   evt.GuildID,
+			ChannelID: evt.ChannelID,
+			MessageID: msg.ID,
+			AuthorID:  msg.Author.ID,
+			Body:      msg.Content,
 		})
 	}
 }

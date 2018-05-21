@@ -74,7 +74,7 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 	}
 
 	log.Printf("put %v", md.Title)
-	statusChannelID, statusMessageID := evt.Channel.ID, ""
+	statusChannelID, statusMessageID := evt.ChannelID, ""
 	embed := &discordgo.MessageEmbed{
 		Color:  0xa680ee,
 		Footer: &discordgo.MessageEmbedFooter{},
@@ -157,7 +157,7 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 				gp.nowPlaying = Play{}
 				gp.mu.Unlock()
 			}
-			gp.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, requeue.shortcut)
+			gp.discord.MessageReactionAdd(evt.ChannelID, evt.MessageID, requeue.shortcut)
 		}),
 	)
 }

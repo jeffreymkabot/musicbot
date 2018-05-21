@@ -67,8 +67,8 @@ func matchPlugin(plugins []plugins.Plugin, arg string) (serviceFunc, bool) {
 
 func runPlugin(plugin plugins.Plugin, arg string) serviceFunc {
 	return func(gsvc *guildService, evt GuildEvent, _ []string) error {
-		gsvc.discord.MessageReactionAdd(evt.Channel.ID, evt.Message.ID, "🔎")
-		defer gsvc.discord.MessageReactionRemove(evt.Channel.ID, evt.Message.ID, "🔎", "@me")
+		gsvc.discord.MessageReactionAdd(evt.ChannelID, evt.MessageID, "🔎")
+		defer gsvc.discord.MessageReactionRemove(evt.ChannelID, evt.MessageID, "🔎", "@me")
 
 		md, err := plugin.Resolve(arg)
 		if err != nil {
@@ -174,7 +174,7 @@ var playlist = command{
 	restrictChannel: true,
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
 		playlistString := strings.Join(gsvc.player.Playlist(), "\n")
-		gsvc.discord.ChannelMessageSend(evt.Channel.ID, "```\n"+playlistString+"\n```")
+		gsvc.discord.ChannelMessageSend(evt.ChannelID, "```\n"+playlistString+"\n```")
 		return nil
 	},
 }
@@ -214,7 +214,7 @@ var get = command{
 		for _, fld := range fields {
 			fmt.Fprintf(buf, "`%v: %v`\n", fld.name, fld.val)
 		}
-		gsvc.discord.ChannelMessageSend(evt.Channel.ID, buf.String())
+		gsvc.discord.ChannelMessageSend(evt.ChannelID, buf.String())
 		return nil
 	},
 }
@@ -284,7 +284,7 @@ var setPlayback = command{
 		if len(args) == 0 || strings.ToLower(args[0]) == "detect" {
 			channelID = detectMusicChannel(guild)
 		} else if strings.ToLower(args[0]) == "here" {
-			channelID = detectUserVoiceChannel(guild, evt.Author.ID)
+			channelID = detectUserVoiceChannel(guild, evt.AuthorID)
 		}
 		if channelID == "" {
 			return errors.New("couldn't detect a voice channel")
@@ -300,7 +300,7 @@ var setListen = command{
 	usage: "whitelist",
 	ack:   "🆗",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		textChannelID := evt.Channel.ID
+		textChannelID := evt.ChannelID
 		if textChannelID == "" {
 			return errors.New("channel please")
 		}
@@ -316,7 +316,7 @@ var unsetListen = command{
 	usage: "unwhitelist",
 	ack:   "🆗",
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
-		textChannelID := evt.Channel.ID
+		textChannelID := evt.ChannelID
 		if textChannelID == "" {
 			return errors.New("channel please")
 		}
@@ -338,9 +338,10 @@ var help = command{
 	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
 		// help gets whispered to the user
 		dmChannelID := ""
-		if evt.Channel.Type == discordgo.ChannelTypeDM || evt.Channel.Type == discordgo.ChannelTypeGroupDM {
-			dmChannelID = evt.Channel.ID
-		} else if channel, err := gsvc.discord.UserChannelCreate(evt.Author.ID); err == nil {
+		evtChannel, err := gsvc.discord.State.Channel(evt.ChannelID)
+		if err == nil && evtChannel.Type == discordgo.ChannelTypeDM || evtChannel.Type == discordgo.ChannelTypeGroupDM {
+			dmChannelID = evt.ChannelID
+		} else if channel, err := gsvc.discord.UserChannelCreate(evt.AuthorID); err == nil {
 			dmChannelID = channel.ID
 		} else {
 			return err
@@ -355,7 +356,7 @@ var help = command{
 		}
 
 		embed := helpForCommandList(gsvc.commands)
-		_, err := gsvc.discord.ChannelMessageSendEmbed(dmChannelID, embed)
+		_, err = gsvc.discord.ChannelMessageSendEmbed(dmChannelID, embed)
 		return err
 	},
 }
