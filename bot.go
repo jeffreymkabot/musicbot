@@ -16,13 +16,13 @@ const defaultMusicChannelPrefix = "music"
 
 // Bot provides resources to and routes events to the appropriate guild service.
 type Bot struct {
-	me            *discordgo.User
-	discord       *discordgo.Session
-	db            *boltGuildStorage
-	commands      []command
-	plugins       []plugins.Plugin
-	mu            sync.RWMutex
-	guildServices map[string]GuildService
+	me       *discordgo.User
+	discord  *discordgo.Session
+	db       *boltGuildStorage
+	commands []command
+	plugins  []plugins.Plugin
+	mu       sync.RWMutex
+	guilds   map[string]GuildService
 }
 
 // New starts a musicbot server.
@@ -63,7 +63,7 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 			plugins.Bandcamp{},
 			plugins.Streamlink{},
 		},
-		guildServices: make(map[string]GuildService),
+		guilds: make(map[string]GuildService),
 	}
 	youtubeSearch, err := plugins.NewYoutubeSearch(youtube)
 	if err == nil {
@@ -98,7 +98,7 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 // Stop closes all services and resources.
 func (b *Bot) Stop() {
 	b.mu.Lock()
-	for _, svc := range b.guildServices {
+	for _, svc := range b.guilds {
 		svc.Close()
 	}
 	b.discord.Close()
@@ -106,34 +106,18 @@ func (b *Bot) Stop() {
 	b.mu.Unlock()
 }
 
-// AddGuild registers a new guild service to which discord events may be routed.
-func (b *Bot) AddGuild(guild *discordgo.Guild) {
-	// cleanup existing guild service if exists
-	// e.g. unhandled disconnect, kick and reinvite
+// Register routes events in a guild to a corresponding service.
+func (b *Bot) Register(guildID string, svc GuildService) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if svc, ok := b.guildServices[guild.ID]; ok {
-		svc.Close()
-	}
+	b.guilds[guildID] = svc
+	b.mu.Unlock()
+}
 
-	// alternative is to lookup guild in database here and resolve idlechannel immediately,
-	// would have to lookup guild twice or pass info into guild fn
-	openPlayer := func(idleChannelID string) GuildPlayer {
-		return NewGuildPlayer(
-			guild.ID,
-			b.discord,
-			idleChannelID,
-			commandShortcuts(b.commands),
-		)
-	}
-	b.guildServices[guild.ID] = Guild(
-		guild,
-		b.discord,
-		b.db,
-		openPlayer,
-		b.commands,
-		b.plugins,
-	)
+// Unregister stops events in a from being routed to a service.
+func (b *Bot) Unregister(guildID string) {
+	b.mu.Lock()
+	delete(b.guilds, guildID)
+	b.mu.Unlock()
 }
 
 type boltGuildStorage struct {

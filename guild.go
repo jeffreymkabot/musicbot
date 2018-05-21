@@ -22,7 +22,7 @@ var ErrGuildServiceClosed = errors.New("service is disposed")
 // Send returns an error if the service has been closed or otherwise cannot process the event.
 // Close is idempotent, but calls to close after the first may return an error.
 type GuildService interface {
-	Send(GuildEvent) error
+	Notify(GuildEvent) error
 	Close() error
 }
 
@@ -55,7 +55,7 @@ type guildListener struct {
 	closed chan struct{}
 }
 
-func (svc *guildListener) Send(evt GuildEvent) error {
+func (svc *guildListener) Notify(evt GuildEvent) error {
 	select {
 	case svc.events <- evt:
 	case <-svc.closed:
@@ -128,30 +128,28 @@ func Guild(
 		closed: make(chan struct{}),
 	}
 
-	// initialize guild service in a separate goroutine
-	// so that the Guild function does not block while the guild service initializes
-	// hold the mutex on the bot's guildServices map for as short a time as possible
-
 	// listener will wait for the guild service to close its resources
 	listener.wg.Add(1)
 
+	info, err := store.Get(guild.ID)
+	if err != nil {
+		info = defaultGuildInfo
+		info.MusicChannel = detectMusicChannel(guild)
+		store.Put(guild.ID, info)
+	}
+
+	gsvc := &guildService{
+		GuildInfo:    info,
+		guildID:      guild.ID,
+		guildOwnerID: guild.OwnerID,
+		discord:      discord,
+		store:        store,
+		player:       openPlayer(info.MusicChannel),
+		commands:     commands,
+		plugins:      plugins,
+	}
+
 	go func(events <-chan GuildEvent) {
-		info, err := store.Get(guild.ID)
-		if err != nil {
-			info = defaultGuildInfo
-			info.MusicChannel = detectMusicChannel(guild)
-			store.Put(guild.ID, info)
-		}
-		gsvc := &guildService{
-			GuildInfo:    info,
-			guildID:      guild.ID,
-			guildOwnerID: guild.OwnerID,
-			discord:      discord,
-			store:        store,
-			player:       openPlayer(info.MusicChannel),
-			commands:     commands,
-			plugins:      plugins,
-		}
 		for evt := range eventChan {
 			switch evt.Type {
 			case MessageEvent:

@@ -22,8 +22,28 @@ func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
 
 func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 	return func(session *discordgo.Session, gc *discordgo.GuildCreate) {
-		log.Printf("add guild %v", gc.Guild.ID)
-		b.AddGuild(gc.Guild)
+		guildID := gc.Guild.ID
+		log.Printf("add guild %v", guildID)
+
+		// alternative is to lookup guild in database here and resolve idlechannel immediately,
+		// would have to lookup guild twice or pass info into guild fn
+		openPlayer := func(idleChannelID string) GuildPlayer {
+			return NewGuildPlayer(
+				guildID,
+				b.discord,
+				idleChannelID,
+				commandShortcuts(b.commands),
+			)
+		}
+
+		b.Register(guildID, Guild(
+			gc.Guild,
+			b.discord,
+			b.db,
+			openPlayer,
+			b.commands,
+			b.plugins,
+		))
 	}
 }
 
@@ -60,10 +80,13 @@ func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chann
 		Author:  *message.Author,
 		Body:    message.Content,
 	}
+
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if svc, ok := b.guildServices[channel.GuildID]; ok {
-		svc.Send(evt)
+	svc, ok := b.guilds[channel.GuildID]
+	b.mu.RUnlock()
+
+	if ok {
+		svc.Notify(evt)
 	}
 }
 
@@ -123,8 +146,10 @@ func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReac
 		Body:    react.Emoji.Name,
 	}
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if svc, ok := b.guildServices[channel.GuildID]; ok {
-		svc.Send(evt)
+	svc, ok := b.guilds[channel.GuildID]
+	b.mu.RUnlock()
+
+	if ok {
+		svc.Notify(evt)
 	}
 }
