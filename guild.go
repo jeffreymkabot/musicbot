@@ -134,6 +134,7 @@ func Guild(
 
 	// listener will wait for the guild service to close its resources
 	listener.wg.Add(1)
+
 	go func(events <-chan GuildEvent) {
 		info, err := store.Get(guild.ID)
 		if err != nil {
@@ -196,13 +197,13 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 		return
 	}
 
-	f, pluginOK := matchPlugin(gsvc.plugins, arg)
+	fn, pluginOK := matchPlugin(gsvc.plugins, arg)
 	if !pluginOK {
 		return
 	}
 
 	log.Printf("evt %v -> plugin %v", evt, arg)
-	gsvc.runAndRespondToMessage(f, evt, nil, requeue.ack)
+	gsvc.runAndRespondToMessage(fn, evt, nil, requeue.ack)
 }
 
 func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
@@ -211,8 +212,8 @@ func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
 	return channelOK && authorOK
 }
 
-func (gsvc *guildService) runAndRespondToMessage(f serviceFunc, evt GuildEvent, args []string, ack string) {
-	err := f(gsvc, evt, args)
+func (gsvc *guildService) runAndRespondToMessage(fn serviceFunc, evt GuildEvent, args []string, ack string) {
+	err := fn(gsvc, evt, args)
 	// error response
 	if err != nil {
 		gsvc.discord.ChannelMessageSend(evt.Channel.ID, fmt.Sprintf("🤔...\n%v", err))
@@ -224,19 +225,24 @@ func (gsvc *guildService) runAndRespondToMessage(f serviceFunc, evt GuildEvent, 
 	}
 }
 
+// check if reaction is invocation of cmd shortcut on the player status message
+// otherwise check if it is a requeue reaction to a previously queued song
 func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
-	// first check if reaction is to the player status message
-	// otherwise check if it is a reaction to a previously queued song
 	nowPlaying, ok := gsvc.player.NowPlaying()
 	if ok && evt.Channel.ID == nowPlaying.statusMessageChannelID && evt.Message.ID == nowPlaying.statusMessageID {
 		for _, cmd := range gsvc.commands {
-			// no viable vector for send error response or success ack
 			if cmd.shortcut == evt.Body {
-				cmd.run(gsvc, evt, []string{})
+				// no error response or success ack
+				_ = cmd.run(gsvc, evt, []string{})
 				return
 			}
 		}
 	}
+
+	if requeue.shortcut != evt.Body {
+		return
+	}
+
 	// react event does not have full message struct, try to recover the message
 	msg, err := gsvc.discord.State.Message(evt.Channel.ID, evt.Message.ID)
 	if err != nil {
@@ -245,7 +251,8 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 			return
 		}
 	}
-	if requeueable(*msg) {
+
+	if requeueable(msg) {
 		gsvc.handleMessageEvent(GuildEvent{
 			Type:    MessageEvent,
 			Channel: evt.Channel,
@@ -274,9 +281,8 @@ func detectUserVoiceChannel(g *discordgo.Guild, userID string) string {
 	return ""
 }
 
-// requeable if not created by me and I reacted to it with the requeue shortcut
-// tolerate false negatives
-func requeueable(msg discordgo.Message) bool {
+// Message is requeueable if I reacted to it with the requeue command shortcut
+func requeueable(msg *discordgo.Message) bool {
 	if msg.Author.Bot {
 		return false
 	}
