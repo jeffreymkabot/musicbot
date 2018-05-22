@@ -330,11 +330,12 @@ var unsetListen = command{
 }
 
 var help = command{
-	name:  "help",
-	alias: []string{"h"},
-	usage: "help [command name]",
-	long:  "Get help about features and commands.",
-	ack:   "📬",
+	name:     "help",
+	alias:    []string{"h"},
+	usage:    "help [command name]",
+	long:     "Get help about features and commands.",
+	shortcut: "❔",
+	ack:      "📬",
 	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		// help gets whispered to the user
 		dmChannelID := ""
@@ -391,7 +392,7 @@ func helpForCommand(cmd command) *discordgo.MessageEmbed {
 }
 
 var helpDesc = fmt.Sprintf(
-	"All guild commands start with `%s`.  Queue a song using `%s [url]`.\nTo get more help about a command use `%s help [command name]` or just whisper me the command name.",
+	"Queue a song using `%s [url]`.\nAll commands start with `%s`.\n\nTo get more help about a command, whisper me the name or use `%s help [name]`.",
 	DefaultCommandPrefix, DefaultCommandPrefix, DefaultCommandPrefix,
 )
 
@@ -428,11 +429,15 @@ func helpForCommandList(commands []command) *discordgo.MessageEmbed {
 	return embed
 }
 
+// help command shortcut always appears at end
 func commandShortcuts(commands []command) (sc []string) {
 	for _, cmd := range commands {
-		if cmd.shortcut != "" {
+		if cmd.name != help.name && cmd.shortcut != "" {
 			sc = append(sc, cmd.shortcut)
 		}
+	}
+	if help.shortcut != "" {
+		sc = append(sc, help.shortcut)
 	}
 	return
 }
