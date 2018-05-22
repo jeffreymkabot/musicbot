@@ -1,4 +1,4 @@
-package music
+package musicbot
 
 import (
 	"errors"
