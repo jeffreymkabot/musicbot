@@ -11,9 +11,6 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
-const defaultCommandPrefix = "#!"
-const defaultMusicChannelPrefix = "music"
-
 // Bot provides resources to and routes events to the appropriate guild service.
 type Bot struct {
 	me       *discordgo.User
@@ -21,8 +18,9 @@ type Bot struct {
 	db       *boltGuildStorage
 	commands []command
 	plugins  []plugins.Plugin
-	mu       sync.RWMutex
-	guilds   map[string]GuildService
+
+	mu     sync.RWMutex
+	guilds map[string]*Guild
 }
 
 // New starts a musicbot server.
@@ -63,7 +61,7 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 			plugins.Bandcamp{},
 			plugins.Streamlink{},
 		},
-		guilds: make(map[string]GuildService),
+		guilds: make(map[string]*Guild),
 	}
 	youtubeSearch, err := plugins.NewYoutubeSearch(youtube)
 	if err == nil {
@@ -107,7 +105,7 @@ func (b *Bot) Stop() {
 }
 
 // Register routes events in a guild to a corresponding service.
-func (b *Bot) Register(guildID string, svc GuildService) {
+func (b *Bot) Register(guildID string, svc *Guild) {
 	b.mu.Lock()
 	b.guilds[guildID] = svc
 	b.mu.Unlock()
@@ -144,8 +142,8 @@ func newBoltGuildStorage(dbPath string) (*boltGuildStorage, error) {
 	return &boltGuildStorage{db}, nil
 }
 
-func (db boltGuildStorage) Get(guildID string) (GuildInfo, error) {
-	info := GuildInfo{}
+func (db boltGuildStorage) Get(guildID string) (GuildConfig, error) {
+	info := GuildConfig{}
 	err := db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("guilds"))
 		val := bucket.Get([]byte(guildID))
@@ -157,7 +155,7 @@ func (db boltGuildStorage) Get(guildID string) (GuildInfo, error) {
 	return info, err
 }
 
-func (db boltGuildStorage) Put(guildID string, info GuildInfo) error {
+func (db boltGuildStorage) Put(guildID string, info GuildConfig) error {
 	val, err := json.Marshal(info)
 	if err != nil {
 		return err

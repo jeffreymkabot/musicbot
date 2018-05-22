@@ -12,31 +12,31 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
+//
+const (
+	DefaultCommandPrefix      = "#!"
+	DefaultMusicChannelPrefix = "music"
+)
+
+// DefaultGuildConfig is the starting configuration for a guild.
+var DefaultGuildConfig = GuildConfig{
+	Prefix: DefaultCommandPrefix,
+}
+
 // ErrGuildServiceTimeout indicates that a guild service has taken too long to accept an event.
 var ErrGuildServiceTimeout = errors.New("service timed out")
 
 // ErrGuildServiceClosed indicates that a guild service has been closed.
 var ErrGuildServiceClosed = errors.New("service is disposed")
 
-// GuildService handles incoming GuildEvents.
-// Send returns an error if the service has been closed or otherwise cannot process the event.
-// Close is idempotent, but calls to close after the first may return an error.
-type GuildService interface {
-	Notify(GuildEvent) error
-	Close() error
-}
-
-// GuildEvent provides instructions to a GuildService.
+// GuildEvent provides instructions to a Guild.
 type GuildEvent struct {
 	Type      GuildEventType
 	GuildID   string
 	ChannelID string
 	MessageID string
 	AuthorID  string
-	// Channel   discordgo.Channel
-	// Message   discordgo.Message
-	// Author    discordgo.User
-	Body string
+	Body      string
 }
 
 func (evt GuildEvent) String() string {
@@ -53,16 +53,20 @@ const (
 	ReactEvent
 )
 
-type guildListener struct {
+// Guild manages incoming GuildEvents.
+// Guild is safe to use in multiple goroutines.
+type Guild struct {
 	events chan<- GuildEvent
 	wg     sync.WaitGroup
 	closed chan struct{}
 }
 
-func (svc *guildListener) Notify(evt GuildEvent) error {
+// Notify passes a GuildEvent to an underlying GuildService.
+// Notify returns an error if the service has been closed or takes too long to accept the event.
+func (g *Guild) Notify(evt GuildEvent) error {
 	select {
-	case svc.events <- evt:
-	case <-svc.closed:
+	case g.events <- evt:
+	case <-g.closed:
 		return ErrGuildServiceClosed
 	case <-time.After(1 * time.Second):
 		return ErrGuildServiceTimeout
@@ -70,20 +74,26 @@ func (svc *guildListener) Notify(evt GuildEvent) error {
 	return nil
 }
 
-func (svc *guildListener) Close() error {
+// Close stops the Guild from accepting more events and releases the resources of an underlying GuildService.
+// Close is idempotent, but calls to close after the first return an error.
+func (g *Guild) Close() error {
 	select {
-	case <-svc.closed:
+	case <-g.closed:
 		return ErrGuildServiceClosed
 	default:
 	}
-	close(svc.closed)
-	close(svc.events)
-	svc.wg.Wait()
+	close(g.closed)
+	close(g.events)
+	g.wg.Wait()
 	return nil
 }
 
-type guildService struct {
-	GuildInfo
+// GuildService interacts with a discord guild.
+type GuildService struct {
+	// GuildService and all functions that act on them
+	// are designed to be used in just one goroutine.
+
+	GuildConfig
 	guildID      string
 	guildOwnerID string
 	discord      *discordgo.Session
@@ -93,17 +103,20 @@ type guildService struct {
 	plugins      []plugins.Plugin
 }
 
-// GuildStorage is used to persist and retrieve guild configuration.
+// GuildStorage persists and retrieves guild configuration.
 type GuildStorage interface {
-	Get(guildID string) (GuildInfo, error)
-	Put(guildID string, info GuildInfo) error
+	Get(guildID string) (GuildConfig, error)
+	Put(guildID string, info GuildConfig) error
 }
 
-// GuildInfo members are persisted using GuildStorage
-type GuildInfo struct {
-	Prefix         string   `json:"prefix"`
+// GuildConfig controls some behavior of the GuildService.
+type GuildConfig struct {
+	// musicbot will act only on messages beginning with this prefix or the default prefix.
+	Prefix string `json:"prefix"`
+	// Some commands require a text channel to be whitelisted before they will run.
 	ListenChannels []string `json:"listen"`
-	MusicChannel   string   `json:"play"`
+	// Use this voice channel to stream music.
+	MusicChannel string `json:"play"`
 	// Loudness sets the loudness target.  Higher is louder.
 	// See https://ffmpeg.org/ffmpeg-filters.html#loudnorm.
 	// Values less than -70.0 or greater than -5.0 have no effect.
@@ -111,22 +124,17 @@ type GuildInfo struct {
 	Loudness float64 `json:"loudness"`
 }
 
-var defaultGuildInfo = GuildInfo{
-	Prefix: defaultCommandPrefix,
-}
-
-// Guild creates a new GuildService.
-// The service returned is safe to use in multiple goroutines.
-func Guild(
+// NewGuild creates a new Guild with an underlying GuildService that is ready for GuildEvents.
+func NewGuild(
 	guild *discordgo.Guild,
 	discord *discordgo.Session,
 	store GuildStorage,
 	openPlayer func(idleChannelID string) GuildPlayer,
 	commands []command,
 	plugins []plugins.Plugin,
-) *guildListener {
+) *Guild {
 	eventChan := make(chan GuildEvent)
-	listener := &guildListener{
+	listener := &Guild{
 		events: eventChan,
 		wg:     sync.WaitGroup{},
 		closed: make(chan struct{}),
@@ -137,13 +145,13 @@ func Guild(
 
 	info, err := store.Get(guild.ID)
 	if err != nil {
-		info = defaultGuildInfo
+		info = DefaultGuildConfig
 		info.MusicChannel = detectMusicChannel(guild)
 		store.Put(guild.ID, info)
 	}
 
-	gsvc := &guildService{
-		GuildInfo:    info,
+	gsvc := &GuildService{
+		GuildConfig:  info,
 		guildID:      guild.ID,
 		guildOwnerID: guild.OwnerID,
 		discord:      discord,
@@ -157,27 +165,29 @@ func Guild(
 		for evt := range eventChan {
 			switch evt.Type {
 			case MessageEvent:
-				gsvc.handleMessageEvent(evt)
+				gsvc.HandleMessageEvent(evt)
 			case ReactEvent:
-				gsvc.handleReactionEvent(evt)
+				gsvc.HandleReactEvent(evt)
 			}
 		}
 		gsvc.player.Close()
-		gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
+		gsvc.store.Put(gsvc.guildID, gsvc.GuildConfig)
 		listener.wg.Done()
 	}(eventChan)
 
 	return listener
 }
 
-// act only on messages beginning with an appropriate prefix in an appropriate channel by an appropriate user
-// match message against commands, then against plugins if no match against commands
-func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
+// HandleMessageEvent may invoke a command or music plugin appropriate to the input.
+// Commands are checked for a match before plugins.
+// HandleMessageEvent acts only on messages that begin with the configured prefix
+// (and if applicable, are in a configured text channel).
+func (gsvc *GuildService) HandleMessageEvent(evt GuildEvent) {
 	prefix := ""
 	if strings.HasPrefix(evt.Body, gsvc.Prefix) {
 		prefix = gsvc.Prefix
-	} else if strings.HasPrefix(evt.Body, defaultCommandPrefix) {
-		prefix = defaultCommandPrefix
+	} else if strings.HasPrefix(evt.Body, DefaultCommandPrefix) {
+		prefix = DefaultCommandPrefix
 	}
 	if prefix == "" {
 		return
@@ -208,13 +218,13 @@ func (gsvc *guildService) handleMessageEvent(evt GuildEvent) {
 	gsvc.runAndRespondToMessage(fn, evt, nil, requeue.ack)
 }
 
-func (gsvc *guildService) isAllowed(cmd command, evt GuildEvent) bool {
+func (gsvc *GuildService) isAllowed(cmd command, evt GuildEvent) bool {
 	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.ChannelID)
 	authorOK := !cmd.ownerOnly || evt.AuthorID == gsvc.guildOwnerID
 	return channelOK && authorOK
 }
 
-func (gsvc *guildService) runAndRespondToMessage(fn serviceFunc, evt GuildEvent, args []string, ack string) {
+func (gsvc *GuildService) runAndRespondToMessage(fn serviceFunc, evt GuildEvent, args []string, ack string) {
 	err := fn(gsvc, evt, args)
 	// error response
 	if err != nil {
@@ -227,11 +237,12 @@ func (gsvc *guildService) runAndRespondToMessage(fn serviceFunc, evt GuildEvent,
 	}
 }
 
-// check if reaction is invocation of cmd shortcut on the player status message
-// otherwise check if it is a requeue reaction to a previously queued song
-func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
+// HandleReactEvent may invoke a command corresponding to the reacted emoji
+// if the reaction is to music player's status message or to a previously queued song.
+// musicbot puts its own reactions in these locations so users do not have to guess what emojis do what.
+func (gsvc *GuildService) HandleReactEvent(evt GuildEvent) {
 	nowPlaying, ok := gsvc.player.NowPlaying()
-	if ok && evt.ChannelID == nowPlaying.statusMessageChannelID && evt.MessageID == nowPlaying.statusMessageID {
+	if ok && evt.ChannelID == nowPlaying.StatusMessageChannelID && evt.MessageID == nowPlaying.StatusMessageID {
 		for _, cmd := range gsvc.commands {
 			if cmd.shortcut == evt.Body {
 				// no error response or success ack
@@ -255,8 +266,8 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 	}
 
 	if requeueable(msg) {
-		// behave as though the reacted message event happened again
-		gsvc.handleMessageEvent(GuildEvent{
+		// act as though the reacted message event happened again
+		gsvc.HandleMessageEvent(GuildEvent{
 			Type:      MessageEvent,
 			GuildID:   evt.GuildID,
 			ChannelID: evt.ChannelID,
@@ -269,7 +280,7 @@ func (gsvc *guildService) handleReactionEvent(evt GuildEvent) {
 
 func detectMusicChannel(g *discordgo.Guild) string {
 	for _, ch := range g.Channels {
-		if ch.Type == discordgo.ChannelTypeGuildVoice && strings.HasPrefix(strings.ToLower(ch.Name), defaultMusicChannelPrefix) {
+		if ch.Type == discordgo.ChannelTypeGuildVoice && strings.HasPrefix(strings.ToLower(ch.Name), DefaultMusicChannelPrefix) {
 			return ch.ID
 		}
 	}
@@ -285,7 +296,7 @@ func detectUserVoiceChannel(g *discordgo.Guild, userID string) string {
 	return ""
 }
 
-// Message is requeueable if I reacted to it with the requeue command shortcut
+// Message is requeueable if musicbot reacted to it with the requeue command shortcut
 func requeueable(msg *discordgo.Message) bool {
 	if msg.Author.Bot {
 		return false

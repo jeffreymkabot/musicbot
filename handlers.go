@@ -16,7 +16,7 @@ func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
 				onGuildCreate(b)(session, gc)
 			}
 		}
-		session.UpdateStatus(0, defaultCommandPrefix+" "+help.name)
+		session.UpdateStatus(0, DefaultCommandPrefix+" "+help.name)
 	}
 }
 
@@ -36,7 +36,7 @@ func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 			)
 		}
 
-		b.Register(guildID, Guild(
+		b.Register(guildID, NewGuild(
 			gc.Guild,
 			b.discord,
 			b.db,
@@ -47,8 +47,6 @@ func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 	}
 }
 
-// worth noting that discordgo event handlers are by default executed in new goroutines
-// all command invocations are async
 func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) {
 	return func(session *discordgo.Session, mc *discordgo.MessageCreate) {
 		if mc.Author.Bot {
@@ -74,12 +72,12 @@ func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) 
 // dispatch event to the corresponding guild service
 func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
 	evt := GuildEvent{
-		Type:    MessageEvent,
-		GuildID: channel.GuildID,
+		Type:      MessageEvent,
+		GuildID:   channel.GuildID,
 		ChannelID: channel.ID,
 		MessageID: message.ID,
-		AuthorID: message.Author.ID,
-		Body:    message.Content,
+		AuthorID:  message.Author.ID,
+		Body:      message.Content,
 	}
 
 	b.mu.RLock()
@@ -93,17 +91,17 @@ func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chann
 
 func onDirectMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
 	evt := GuildEvent{
-		Type:    MessageEvent,
-		GuildID: channel.GuildID,
+		Type:      MessageEvent,
+		GuildID:   channel.GuildID,
 		ChannelID: channel.ID,
 		MessageID: message.ID,
-		AuthorID: message.Author.ID,
-		Body:    message.Content,
+		AuthorID:  message.Author.ID,
+		Body:      message.Content,
 	}
-	arg := strings.TrimPrefix(evt.Body, defaultCommandPrefix)
+	arg := strings.TrimPrefix(evt.Body, DefaultCommandPrefix)
 	cmd, argv, ok := matchCommand(b.commands, arg)
 	// help command gets a synthetic guild service, _just_ what is needed to run
-	gsvc := &guildService{
+	gsvc := &GuildService{
 		discord:  b.discord,
 		commands: b.commands,
 	}
@@ -141,12 +139,12 @@ func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReac
 	}
 
 	evt := GuildEvent{
-		Type:    ReactEvent,
-		GuildID: channel.GuildID,
+		Type:      ReactEvent,
+		GuildID:   channel.GuildID,
 		ChannelID: channel.ID,
 		MessageID: react.MessageID,
-		AuthorID: react.UserID,
-		Body: react.Emoji.Name,
+		AuthorID:  react.UserID,
+		Body:      react.Emoji.Name,
 	}
 	b.mu.RLock()
 	svc, ok := b.guilds[channel.GuildID]

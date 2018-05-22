@@ -31,9 +31,9 @@ type GuildPlayer interface {
 
 // Play holds data related to the playback of an audio stream in a guild.
 type Play struct {
-	statusMessageChannelID string
-	statusMessageID        string
-	metadata               plugins.Metadata
+	plugins.Metadata
+	StatusMessageChannelID string
+	StatusMessageID        string
 }
 
 type guildPlayer struct {
@@ -108,9 +108,9 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 
 			gp.mu.Lock()
 			gp.nowPlaying = Play{
-				statusMessageChannelID: msg.ChannelID,
-				statusMessageID:        msg.ID,
-				metadata:               md,
+				Metadata:               md,
+				StatusMessageChannelID: msg.ChannelID,
+				StatusMessageID:        msg.ID,
 			}
 			gp.mu.Unlock()
 
@@ -165,7 +165,7 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 func (gp *guildPlayer) NowPlaying() (play Play, ok bool) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
-	if gp.nowPlaying.statusMessageID == "" {
+	if gp.nowPlaying.StatusMessageID == "" {
 		return Play{}, false
 	}
 	return gp.nowPlaying, true

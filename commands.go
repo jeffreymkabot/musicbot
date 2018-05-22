@@ -15,7 +15,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-type serviceFunc func(*guildService, GuildEvent, []string) error
+type serviceFunc func(*GuildService, GuildEvent, []string) error
 
 type command struct {
 	name  string
@@ -66,7 +66,7 @@ func matchPlugin(plugins []plugins.Plugin, arg string) (serviceFunc, bool) {
 }
 
 func runPlugin(plugin plugins.Plugin, arg string) serviceFunc {
-	return func(gsvc *guildService, evt GuildEvent, _ []string) error {
+	return func(gsvc *GuildService, evt GuildEvent, _ []string) error {
 		gsvc.discord.MessageReactionAdd(evt.ChannelID, evt.MessageID, "🔎")
 		defer gsvc.discord.MessageReactionRemove(evt.ChannelID, evt.MessageID, "🔎", "@me")
 
@@ -98,7 +98,7 @@ var reconnect = command{
 	long:            "Restart the music player.  This will empty the playlist.",
 	restrictChannel: true,
 	ack:             "🆗",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		gsvc.player.Close()
 		// idle in the music channel
 		gsvc.player = NewGuildPlayer(
@@ -117,7 +117,7 @@ var skip = command{
 	long:            "Skip the currently playing song.",
 	restrictChannel: true,
 	shortcut:        "⏭",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		gsvc.player.Skip()
 		return nil
 	},
@@ -130,7 +130,7 @@ var pause = command{
 	long:            "Pause/unpause the currently playing song.",
 	restrictChannel: true,
 	shortcut:        "⏯",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		gsvc.player.Pause()
 		return nil
 	},
@@ -143,7 +143,7 @@ var clear = command{
 	long:            "Clear the playlist.",
 	restrictChannel: true,
 	ack:             "🔘",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		gsvc.player.Clear()
 		return nil
 	},
@@ -157,12 +157,12 @@ var requeue = command{
 	restrictChannel: true,
 	shortcut:        "🔂",
 	ack:             "☑",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		play, ok := gsvc.player.NowPlaying()
 		if !ok {
 			return errors.New("nothing playing")
 		}
-		return gsvc.player.Put(evt, gsvc.MusicChannel, play.metadata, gsvc.Loudness)
+		return gsvc.player.Put(evt, gsvc.MusicChannel, play.Metadata, gsvc.Loudness)
 	},
 }
 
@@ -172,7 +172,7 @@ var playlist = command{
 	usage:           "playlist",
 	long:            "List any queued songs.",
 	restrictChannel: true,
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		playlistString := strings.Join(gsvc.player.Playlist(), "\n")
 		gsvc.discord.ChannelMessageSend(evt.ChannelID, "```\n"+playlistString+"\n```")
 		return nil
@@ -183,7 +183,7 @@ var get = command{
 	name:  "get",
 	usage: "get [field]",
 	long:  "Get preferences saved for this guild.  Supports regular expressions.\nE.g., `get .*` to get all preferences.",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		if len(args) == 0 {
 			return errors.New("field please")
 		}
@@ -191,7 +191,7 @@ var get = command{
 		if err != nil {
 			return err
 		}
-		info := reflect.ValueOf(&gsvc.GuildInfo).Elem()
+		info := reflect.ValueOf(&gsvc.GuildConfig).Elem()
 		infoType := info.Type()
 		var fields []struct {
 			name string
@@ -225,13 +225,13 @@ var set = command{
 	name:  "set",
 	usage: "set [field] [value]",
 	long:  "Set preferences for this guild.  Omit [value] to empty the preference.",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		if len(args) == 0 {
 			return errors.New("field please")
 		}
 		defer get.run(gsvc, evt, args)
-		defer gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
-		info := structs.New(&gsvc.GuildInfo)
+		defer gsvc.store.Put(gsvc.guildID, gsvc.GuildConfig)
+		info := structs.New(&gsvc.GuildConfig)
 		for _, fld := range info.Fields() {
 			if strings.ToLower(fld.Name()) == strings.ToLower(args[0]) {
 				if len(args) == 1 {
@@ -268,10 +268,10 @@ var setPlayback = command{
 	name:  "playback",
 	usage: "playback [detect|here]",
 	long: "Set the music playback channel for the guild." +
-		"\n`playback` or `playback detect` will look for a voice channel starting with `" + defaultMusicChannelPrefix + "`." +
+		"\n`playback` or `playback detect` will look for a voice channel starting with `" + DefaultMusicChannelPrefix + "`." +
 		"\n`playback here` will look for the voice channel you are in.",
 	ack: "🆗",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		guild, err := gsvc.discord.State.Guild(gsvc.guildID)
 		if err != nil {
 			guild, err = gsvc.discord.Guild(gsvc.guildID)
@@ -299,7 +299,7 @@ var setListen = command{
 	name:  "whitelist",
 	usage: "whitelist",
 	ack:   "🆗",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		textChannelID := evt.ChannelID
 		if textChannelID == "" {
 			return errors.New("channel please")
@@ -307,7 +307,7 @@ var setListen = command{
 		if !contains(gsvc.ListenChannels, textChannelID) {
 			gsvc.ListenChannels = append(gsvc.ListenChannels, textChannelID)
 		}
-		return gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
+		return gsvc.store.Put(gsvc.guildID, gsvc.GuildConfig)
 	},
 }
 
@@ -315,7 +315,7 @@ var unsetListen = command{
 	name:  "unwhitelist",
 	usage: "unwhitelist",
 	ack:   "🆗",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		textChannelID := evt.ChannelID
 		if textChannelID == "" {
 			return errors.New("channel please")
@@ -325,7 +325,7 @@ var unsetListen = command{
 				gsvc.ListenChannels = append(gsvc.ListenChannels[:i], gsvc.ListenChannels[i+1:]...)
 			}
 		}
-		return gsvc.store.Put(gsvc.guildID, gsvc.GuildInfo)
+		return gsvc.store.Put(gsvc.guildID, gsvc.GuildConfig)
 	},
 }
 
@@ -335,7 +335,7 @@ var help = command{
 	usage: "help [command name]",
 	long:  "Get help about features and commands.",
 	ack:   "📬",
-	run: func(gsvc *guildService, evt GuildEvent, args []string) error {
+	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		// help gets whispered to the user
 		dmChannelID := ""
 		evtChannel, err := gsvc.discord.State.Channel(evt.ChannelID)
@@ -392,7 +392,7 @@ func helpForCommand(cmd command) *discordgo.MessageEmbed {
 
 var helpDesc = fmt.Sprintf(
 	"All guild commands start with `%s`.  Queue a song using `%s [url]`.\nTo get more help about a command use `%s help [command name]` or just whisper me the command name.",
-	defaultCommandPrefix, defaultCommandPrefix, defaultCommandPrefix,
+	DefaultCommandPrefix, DefaultCommandPrefix, DefaultCommandPrefix,
 )
 
 // TODO update help instructions to reflect supported plugins
