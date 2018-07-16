@@ -3,6 +3,7 @@ package musicbot
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"strings"
@@ -13,10 +14,26 @@ import (
 	"github.com/jeffreymkabot/discordvoice"
 	"github.com/jeffreymkabot/discordvoice/discordvoice"
 	"github.com/jeffreymkabot/musicbot/plugins"
+	"github.com/jonas747/dca"
 )
 
 // ErrInvalidMusicChannel is emitted when the music channel configured for a guild is not a discord voice channel.
 var ErrInvalidMusicChannel = errors.New("set a valid voice channel for music playback, then call reconnect")
+
+var encodeOptions = dca.EncodeOptions{
+	Volume:           256,
+	Channels:         2,
+	FrameRate:        48000,
+	FrameDuration:    20,
+	Bitrate:          128,
+	RawOutput:        false,
+	Application:      dca.AudioApplicationAudio,
+	CompressionLevel: 10,
+	PacketLoss:       1,
+	BufferedFrames:   100,
+	VBR:              false,
+	AudioFilter:      "",
+}
 
 // GuildPlayer streams audio to a voice channel in a guild.
 type GuildPlayer interface {
@@ -39,6 +56,7 @@ type Play struct {
 type guildPlayer struct {
 	guildID string
 	discord *discordgo.Session
+	device  *discordvoice.Device
 	*player.Player
 	cmdShortcuts []string
 	mu           sync.Mutex
@@ -59,8 +77,8 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 	return &guildPlayer{
 		guildID: guildID,
 		discord: discord,
+		device:  discordvoice.New(discord, guildID, 150*time.Millisecond),
 		Player: player.New(
-			discordvoice.New(discord, guildID, 150*time.Millisecond),
 			player.QueueLength(10),
 			player.IdleFunc(idle, 1000),
 		),
@@ -74,77 +92,32 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 	}
 
 	log.Printf("put %v", md.Title)
+
 	statusChannelID, statusMessageID := evt.ChannelID, ""
-	embed := &discordgo.MessageEmbed{
-		Color:  0xa680ee,
-		Footer: &discordgo.MessageEmbedFooter{},
-	}
-
-	refreshStatus := func(playing bool, elapsed time.Duration, lst []string) {
-		playPaused := "▶️ "
-		if !playing {
-			playPaused = "⏸️ "
-		}
-		embed.Title = playPaused + md.Title
-		embed.Description = prettyTime(elapsed) + "/" + prettyTime(md.Duration)
-
-		embed.Fields = nil
-		if len(lst) > 0 {
-			embed.Fields = []*discordgo.MessageEmbedField{
-				&discordgo.MessageEmbedField{
-					Name:  "Playlist",
-					Value: strings.Join(lst, "\n"),
-				},
-			}
-		}
-
-		if statusMessageID == "" {
-			msg, err := gp.discord.ChannelMessageSendEmbed(statusChannelID, embed)
-			if err != nil {
-				log.Printf("failed to display player status %v", err)
-				return
-			}
-			statusMessageID = msg.ID
-
-			gp.mu.Lock()
-			gp.nowPlaying = Play{
-				Metadata:               md,
-				StatusMessageChannelID: msg.ChannelID,
-				StatusMessageID:        msg.ID,
-			}
-			gp.mu.Unlock()
-
-			for _, emoji := range gp.cmdShortcuts {
-				if err := gp.discord.MessageReactionAdd(statusChannelID, statusMessageID, emoji); err != nil {
-					log.Printf("failed to attach cmd shortcut to player status %v", err)
-				}
-			}
-		} else {
-			go func() {
-				_, err := gp.discord.ChannelMessageEditEmbed(statusChannelID, statusMessageID, embed)
-				if err != nil {
-					log.Printf("failed to refresh player status %v", err)
-				}
-			}()
-		}
-	}
+	statusEmbed := statusEmbedFunc()
+	updateStatus := updateStatusFunc(gp, md, statusChannelID)
 
 	return gp.Enqueue(
-		voiceChannelID,
 		md.Title,
-		md.OpenFunc,
+		openSrcFunc(md.OpenFunc, loudness),
+		openDstFunc(gp.device, voiceChannelID),
 		player.Duration(md.Duration),
-		player.Loudness(loudness),
 		player.OnStart(func() {
-			refreshStatus(true, 0, gp.Playlist())
+			embed := statusEmbed(embedConfig{md.Title, true, md.Duration, 0, nil, gp.Playlist()})
+			statusMessageID = updateStatus(embed, statusMessageID)
 		}),
-		player.OnPause(func(d time.Duration) { refreshStatus(false, d, gp.Playlist()) }),
-		player.OnResume(func(d time.Duration) { refreshStatus(true, d, gp.Playlist()) }),
+		player.OnPause(func(d time.Duration) {
+			embed := statusEmbed(embedConfig{md.Title, false, md.Duration, d, nil, gp.Playlist()})
+			statusMessageID = updateStatus(embed, statusMessageID)
+		}),
+		player.OnResume(func(d time.Duration) {
+			embed := statusEmbed(embedConfig{md.Title, true, md.Duration, d, nil, gp.Playlist()})
+			statusMessageID = updateStatus(embed, statusMessageID)
+		}),
 		player.OnProgress(
 			func(d time.Duration, frameTimes []time.Duration) {
-				avg, dev, max, min := statistics(latenciesAsFloat(frameTimes))
-				embed.Footer.Text = fmt.Sprintf("avg %.3fms, dev %.3fms, max %.3fms, min %.3fms", avg, dev, max, min)
-				refreshStatus(true, d, gp.Playlist())
+				embed := statusEmbed(embedConfig{md.Title, true, md.Duration, d, frameTimes, gp.Playlist()})
+				statusMessageID = updateStatus(embed, statusMessageID)
 			},
 			5*time.Second,
 		),
@@ -160,6 +133,99 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 			gp.discord.MessageReactionAdd(evt.ChannelID, evt.MessageID, requeue.shortcut)
 		}),
 	)
+}
+
+func openSrcFunc(openFunc func() (io.ReadCloser, error), loudness float64) player.SourceOpenerFunc {
+	return func() (player.Source, error) {
+		rc, err := openFunc()
+		if err != nil {
+			return nil, err
+		}
+		opts := encodeOptions
+		if loudness >= 70.0 && loudness <= -5.0 {
+			opts.AudioFilter = fmt.Sprintf("loudnorm=i=%.1f", loudness)
+		}
+		return discordvoice.NewSource(rc, &opts)
+	}
+}
+
+func openDstFunc(device *discordvoice.Device, channelID string) player.DeviceOpenerFunc {
+	return func() (io.Writer, error) {
+		return device.Open(channelID)
+	}
+}
+
+type embedConfig struct {
+	title      string
+	playing    bool
+	duration   time.Duration
+	elapsed    time.Duration
+	frameTimes []time.Duration
+	playlist   []string
+}
+
+func statusEmbedFunc() func(cfg embedConfig) *discordgo.MessageEmbed {
+	embed := &discordgo.MessageEmbed{
+		Color:  0xa680ee,
+		Footer: &discordgo.MessageEmbedFooter{},
+	}
+	return func(cfg embedConfig) *discordgo.MessageEmbed {
+		playPaused := "▶️"
+		if !cfg.playing {
+			playPaused = "⏸️"
+		}
+		embed.Title = playPaused + " " + cfg.title
+		embed.Description = prettyTime(cfg.elapsed) + "/" + prettyTime(cfg.duration)
+		if len(cfg.playlist) > 0 {
+			embed.Fields = []*discordgo.MessageEmbedField{
+				&discordgo.MessageEmbedField{
+					Name:  "Playlist",
+					Value: strings.Join(cfg.playlist, "\n"),
+				},
+			}
+		}
+		if len(cfg.frameTimes) > 0 {
+			avg, dev, max, min := statistics(latenciesAsFloat(cfg.frameTimes))
+			embed.Footer.Text = fmt.Sprintf("avg %.3fms, dev %.3fms, max %.3fms, min %.3fms", avg, dev, max, min)
+		}
+		return embed
+	}
+}
+
+func updateStatusFunc(gp *guildPlayer, md plugins.Metadata, channelID string) func(*discordgo.MessageEmbed, string) string {
+	return func(embed *discordgo.MessageEmbed, messageID string) string {
+		if messageID == "" {
+			msg, err := gp.discord.ChannelMessageSendEmbed(channelID, embed)
+			if err != nil {
+				log.Printf("failed to display player status %v", err)
+				return ""
+			}
+
+			gp.mu.Lock()
+			gp.nowPlaying = Play{
+				Metadata:               md,
+				StatusMessageChannelID: msg.ChannelID,
+				StatusMessageID:        msg.ID,
+			}
+			gp.mu.Unlock()
+
+			for _, emoji := range gp.cmdShortcuts {
+				if err := gp.discord.MessageReactionAdd(channelID, msg.ID, emoji); err != nil {
+					log.Printf("failed to attach cmd shortcut to player status %v", err)
+				}
+			}
+			return msg.ID
+		}
+
+		// edit message in separate goroutine so the edit http request does not  interfere with audio playback
+		go func() {
+			_, err := gp.discord.ChannelMessageEditEmbed(channelID, messageID, embed)
+			if err != nil {
+				log.Printf("failed to refresh player status %v", err)
+			}
+		}()
+		return messageID
+	}
 }
 
 func (gp *guildPlayer) NowPlaying() (play Play, ok bool) {

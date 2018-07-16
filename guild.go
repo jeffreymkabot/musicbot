@@ -296,7 +296,8 @@ func detectUserVoiceChannel(g *discordgo.Guild, userID string) string {
 	return ""
 }
 
-// Message is requeueable if musicbot reacted to it with the requeue command shortcut
+// Message is requeueable if it was not sent by a bot and
+// musicbot reacted to it with the requeue command shortcut
 func requeueable(msg *discordgo.Message) bool {
 	if msg.Author.Bot {
 		return false
