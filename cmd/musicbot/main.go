@@ -26,14 +26,12 @@ func main() {
 	}
 	_, err := toml.DecodeFile(*cfgFile, &cfg)
 	if err != nil {
-		log.Fatalf("Error opening cfg file: %v", err)
+		log.Fatalf("Failed to open cfg file: %v", err)
 	}
-
-	log.Printf("Using config %#v", cfg)
 
 	bot, err := musicbot.New(cfg.Token, cfg.Bolt, cfg.Soundcloud, cfg.Youtube)
 	if err != nil {
-		log.Fatalf("%v", err)
+		log.Fatalf("Failed to start bot: %v", err)
 	}
 	defer bot.Stop()
 

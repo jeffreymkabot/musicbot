@@ -7,16 +7,9 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-func onReady(b *Bot) func(*discordgo.Session, *discordgo.Ready) {
+func onReady(readyChan chan<- *discordgo.Ready) func(*discordgo.Session, *discordgo.Ready) {
 	return func(session *discordgo.Session, ready *discordgo.Ready) {
-		log.Printf("ready %#v", ready)
-		for _, g := range ready.Guilds {
-			if !g.Unavailable {
-				gc := &discordgo.GuildCreate{Guild: g}
-				onGuildCreate(b)(session, gc)
-			}
-		}
-		session.UpdateStatus(0, DefaultCommandPrefix+" "+help.name)
+		readyChan <- ready
 	}
 }
 

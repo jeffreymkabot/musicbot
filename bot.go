@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/boltdb/bolt"
 	"github.com/bwmarrin/discordgo"
@@ -13,6 +14,7 @@ import (
 
 // Bot provides resources to and routes events to the appropriate guild service.
 type Bot struct {
+	quit     chan struct{}
 	me       *discordgo.User
 	discord  *discordgo.Session
 	db       *boltGuildStorage
@@ -38,6 +40,7 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 	discord.LogLevel = discordgo.LogWarning
 
 	b := &Bot{
+		quit:    make(chan struct{}),
 		discord: discord,
 		db:      db,
 		commands: []command{
@@ -74,7 +77,10 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 	discord.AddHandler(onMessageCreate(b))
 	discord.AddHandler(onMessageReactionAdd(b))
 	discord.AddHandler(onMessageReactionRemove(b))
-	discord.AddHandler(onReady(b))
+
+	// TODO review behavior around secondary ready events
+	readyChan := make(chan *discordgo.Ready)
+	discord.AddHandlerOnce(onReady(readyChan))
 
 	err = discord.Open()
 	if err != nil {
@@ -82,19 +88,50 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 		return nil, err
 	}
 
-	// possible to take this from ready instead???
-	b.me, err = discord.User("@me")
-	if err != nil {
+	var ready *discordgo.Ready
+	select {
+	case ready = <-readyChan:
+	case <-time.After(10 * time.Second):
 		discord.Close()
 		db.Close()
-		return nil, err
+		return nil, errors.New("failed to receive READY event in time")
 	}
+	log.Printf("got READY event with %v guilds", len(ready.Guilds))
+	b.me = ready.User
+
+	for _, g := range ready.Guilds {
+		if !g.Unavailable {
+			gc := &discordgo.GuildCreate{Guild: g}
+			onGuildCreate(b)(discord, gc)
+		}
+	}
+
+	go statusLoop(discord, b.quit)
 
 	return b, nil
 }
 
-// Stop closes all services and resources.
+func statusLoop(discord *discordgo.Session, quit <-chan struct{}) {
+	tick := time.NewTicker(1 * time.Minute)
+	for {
+		select {
+		case <-tick.C:
+			discord.UpdateStatus(0, DefaultCommandPrefix+" "+help.name)
+		case <-quit:
+			tick.Stop()
+			return
+		}
+	}
+}
+
+// Stop closes all services, resources, and goroutines.
 func (b *Bot) Stop() {
+	select {
+	case <-b.quit:
+	default:
+		close(b.quit)
+	}
+
 	b.mu.Lock()
 	for _, svc := range b.guilds {
 		svc.Close()
