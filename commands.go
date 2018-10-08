@@ -268,8 +268,8 @@ var setPlayback = command{
 	name:  "playback",
 	usage: "playback [detect|here]",
 	long: "Set the music playback channel for the guild." +
-		"\n`playback` or `playback detect` will look for a voice channel starting with `" + DefaultMusicChannelPrefix + "`." +
-		"\n`playback here` will look for the voice channel you are in.",
+		"\n`playback` or `playback detect` set it to a voice channel with a name that contains the word `music`." +
+		"\n`playback here` will set it to the voice channel you are in.",
 	ack: "🆗",
 	run: func(gsvc *GuildService, evt GuildEvent, args []string) error {
 		guild, err := gsvc.discord.State.Guild(gsvc.guildID)

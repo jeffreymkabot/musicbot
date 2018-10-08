@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -12,15 +13,11 @@ import (
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
 
-//
-const (
-	DefaultCommandPrefix      = "#!"
-	DefaultMusicChannelPrefix = "music"
-)
+const DefaultCommandPrefix = "#!"
 
 // DefaultGuildConfig is the starting configuration for a guild.
 var DefaultGuildConfig = GuildConfig{
-	Prefix: DefaultCommandPrefix,
+	Prefix: "#!",
 }
 
 // ErrGuildServiceTimeout indicates that a guild service has taken too long to accept an event.
@@ -278,9 +275,11 @@ func (gsvc *GuildService) HandleReactEvent(evt GuildEvent) {
 	}
 }
 
+var detectMusicChannelPattern = regexp.MustCompile(`(?i)\bmusic\b`)
+
 func detectMusicChannel(g *discordgo.Guild) string {
 	for _, ch := range g.Channels {
-		if ch.Type == discordgo.ChannelTypeGuildVoice && strings.HasPrefix(strings.ToLower(ch.Name), DefaultMusicChannelPrefix) {
+		if ch.Type == discordgo.ChannelTypeGuildVoice && detectMusicChannelPattern.MatchString(ch.Name) {
 			return ch.ID
 		}
 	}
