@@ -64,13 +64,8 @@ func onMessageCreate(b *Bot) func(*discordgo.Session, *discordgo.MessageCreate) 
 
 // dispatch event to the corresponding guild service
 func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
-	evt := GuildEvent{
-		Type:      MessageEvent,
-		GuildID:   channel.GuildID,
-		ChannelID: channel.ID,
-		MessageID: message.ID,
-		AuthorID:  message.Author.ID,
-		Body:      message.Content,
+	evt := MessageEvent{
+		Message: message,
 	}
 
 	b.mu.RLock()
@@ -83,15 +78,10 @@ func onGuildMessage(b *Bot, message *discordgo.Message, channel *discordgo.Chann
 }
 
 func onDirectMessage(b *Bot, message *discordgo.Message, channel *discordgo.Channel) {
-	evt := GuildEvent{
-		Type:      MessageEvent,
-		GuildID:   channel.GuildID,
-		ChannelID: channel.ID,
-		MessageID: message.ID,
-		AuthorID:  message.Author.ID,
-		Body:      message.Content,
+	evt := MessageEvent{
+		Message: message,
 	}
-	arg := strings.TrimPrefix(evt.Body, DefaultCommandPrefix)
+	arg := strings.TrimPrefix(evt.Message.Content, DefaultCommandPrefix)
 	cmd, argv, ok := matchCommand(b.commands, arg)
 	// help command gets a synthetic guild service, _just_ what is needed to run
 	gsvc := &GuildService{
@@ -131,13 +121,8 @@ func onReaction(b *Bot, session *discordgo.Session, react *discordgo.MessageReac
 		return
 	}
 
-	evt := GuildEvent{
-		Type:      ReactEvent,
-		GuildID:   channel.GuildID,
-		ChannelID: channel.ID,
-		MessageID: react.MessageID,
-		AuthorID:  react.UserID,
-		Body:      react.Emoji.Name,
+	evt := ReactEvent{
+		Reaction: react,
 	}
 	b.mu.RLock()
 	svc, ok := b.guilds[channel.GuildID]

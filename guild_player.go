@@ -37,7 +37,7 @@ var encodeOptions = dca.EncodeOptions{
 
 // GuildPlayer streams audio to a voice channel in a guild.
 type GuildPlayer interface {
-	Put(evt GuildEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error
+	Put(evt MessageEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error
 	Skip()
 	Pause()
 	Clear()
@@ -86,14 +86,14 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 	}
 }
 
-func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error {
+func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error {
 	if !discordvoice.ValidVoiceChannel(gp.discord, voiceChannelID) {
 		return ErrInvalidMusicChannel
 	}
 
 	log.Printf("put %v", md.Title)
 
-	statusChannelID, statusMessageID := evt.ChannelID, ""
+	statusChannelID, statusMessageID := evt.Message.ChannelID, ""
 	statusEmbed := statusEmbedFunc()
 	updateStatus := updateStatusFunc(gp, md, statusChannelID)
 
@@ -130,7 +130,7 @@ func (gp *guildPlayer) Put(evt GuildEvent, voiceChannelID string, md plugins.Met
 				gp.nowPlaying = Play{}
 				gp.mu.Unlock()
 			}
-			gp.discord.MessageReactionAdd(evt.ChannelID, evt.MessageID, requeue.shortcut)
+			gp.discord.MessageReactionAdd(evt.Message.ChannelID, evt.Message.ID, requeue.shortcut)
 		}),
 	)
 }

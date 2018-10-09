@@ -27,28 +27,36 @@ var ErrGuildServiceTimeout = errors.New("service timed out")
 var ErrGuildServiceClosed = errors.New("service is disposed")
 
 // GuildEvent provides instructions to a Guild.
-type GuildEvent struct {
-	Type      GuildEventType
-	GuildID   string
-	ChannelID string
-	MessageID string
-	AuthorID  string
-	Body      string
+type GuildEvent interface {
+	eventType()
 }
 
-func (evt GuildEvent) String() string {
-	return fmt.Sprintf("Guild:%v|Channel:%v|Author:%v|Body:%v",
-		evt.GuildID, evt.ChannelID, evt.AuthorID, evt.Body)
+type MessageEvent struct {
+	Message *discordgo.Message
 }
 
-// GuildEventType classifies the source of a GuildEvent.
-type GuildEventType int
+func (MessageEvent) eventType() {}
 
-// GuildEventTypes
-const (
-	MessageEvent GuildEventType = iota
-	ReactEvent
-)
+type ReactEvent struct {
+	Reaction *discordgo.MessageReaction
+}
+
+func (ReactEvent) eventType() {}
+
+func (r ReactEvent) pseudoMessageEvent() MessageEvent {
+	return MessageEvent{
+		Message: &discordgo.Message{
+			GuildID:   r.Reaction.GuildID,
+			ChannelID: r.Reaction.ChannelID,
+			Content:   r.Reaction.Emoji.Name,
+		},
+	}
+}
+
+// func (evt GuildEvent) String() string {
+// 	return fmt.Sprintf("Guild:%v|Channel:%v|Author:%v|Body:%v",
+// 		evt.GuildID, evt.ChannelID, evt.AuthorID, evt.Body)
+// }
 
 // Guild manages incoming GuildEvents.
 // Guild is safe to use in multiple goroutines.
@@ -160,7 +168,7 @@ func NewGuild(
 
 	go func(events <-chan GuildEvent) {
 		for evt := range eventChan {
-			switch evt.Type {
+			switch evt := evt.(type) {
 			case MessageEvent:
 				gsvc.HandleMessageEvent(evt)
 			case ReactEvent:
@@ -177,20 +185,13 @@ func NewGuild(
 
 // HandleMessageEvent may invoke a command or music plugin appropriate to the input.
 // Commands are checked for a match before plugins.
-// HandleMessageEvent acts only on messages that begin with the configured prefix
+// HandleMessageEvent acts only on messages that begin with the configured prefix or mention musicbot
 // (and if applicable, are in a configured text channel).
-func (gsvc *GuildService) HandleMessageEvent(evt GuildEvent) {
-	prefix := ""
-	if strings.HasPrefix(evt.Body, gsvc.Prefix) {
-		prefix = gsvc.Prefix
-	} else if strings.HasPrefix(evt.Body, DefaultCommandPrefix) {
-		prefix = DefaultCommandPrefix
-	}
-	if prefix == "" {
+func (gsvc *GuildService) HandleMessageEvent(evt MessageEvent) {
+	arg, ok := gsvc.checkMessageEvent(evt)
+	if !ok {
 		return
 	}
-
-	arg := strings.TrimSpace(strings.TrimPrefix(evt.Body, prefix))
 
 	cmd, argv, cmdOK := matchCommand(gsvc.commands, arg)
 	if cmdOK {
@@ -215,48 +216,76 @@ func (gsvc *GuildService) HandleMessageEvent(evt GuildEvent) {
 	gsvc.runAndRespondToMessage(fn, evt, nil, requeue.ack)
 }
 
-func (gsvc *GuildService) isAllowed(cmd command, evt GuildEvent) bool {
-	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.ChannelID)
-	authorOK := !cmd.ownerOnly || evt.AuthorID == gsvc.guildOwnerID
+// check that the message begins with an appropriate prefix or begins with mentioning musicbot
+func (gsvc *GuildService) checkMessageEvent(evt MessageEvent) (string, bool) {
+	me := gsvc.discord.State.User
+	message := evt.Message
+	if gsvc.Prefix != "" && strings.HasPrefix(message.Content, gsvc.Prefix) {
+		arg := strings.TrimSpace(strings.TrimPrefix(message.Content, gsvc.Prefix))
+		return arg, true
+	}
+
+	if strings.HasPrefix(message.Content, DefaultCommandPrefix) {
+		arg := strings.TrimSpace(strings.TrimPrefix(message.Content, DefaultCommandPrefix))
+		return arg, true
+	}
+
+	for _, mention := range message.Mentions {
+		if mention.ID == me.ID && strings.HasPrefix(message.Content, me.Mention()) {
+			arg := strings.TrimSpace(strings.TrimPrefix(message.Content, me.Mention()))
+			return arg, true
+		}
+	}
+
+	return "", false
+}
+
+func (gsvc *GuildService) isAllowed(cmd command, evt MessageEvent) bool {
+	channelOK := !cmd.restrictChannel || contains(gsvc.ListenChannels, evt.Message.ChannelID)
+	authorOK := !cmd.ownerOnly || evt.Message.Author.ID == gsvc.guildOwnerID
 	return channelOK && authorOK
 }
 
-func (gsvc *GuildService) runAndRespondToMessage(fn serviceFunc, evt GuildEvent, args []string, ack string) {
+func (gsvc *GuildService) runAndRespondToMessage(fn serviceFunc, evt MessageEvent, args []string, ack string) {
 	err := fn(gsvc, evt, args)
 	// error response
 	if err != nil {
-		gsvc.discord.ChannelMessageSend(evt.ChannelID, fmt.Sprintf("🤔...\n%v", err))
+		gsvc.discord.ChannelMessageSend(evt.Message.ChannelID, fmt.Sprintf("🤔...\n%v", err))
 		return
 	}
 	// success ack
 	if ack != "" {
-		gsvc.discord.MessageReactionAdd(evt.ChannelID, evt.MessageID, ack)
+		gsvc.discord.MessageReactionAdd(evt.Message.ChannelID, evt.Message.ID, ack)
 	}
 }
 
 // HandleReactEvent may invoke a command corresponding to the reacted emoji
 // if the reaction is to music player's status message or to a previously queued song.
 // musicbot puts its own reactions in these locations so users do not have to guess what emojis do what.
-func (gsvc *GuildService) HandleReactEvent(evt GuildEvent) {
+func (gsvc *GuildService) HandleReactEvent(evt ReactEvent) {
+	emoji := evt.Reaction.Emoji.Name
+
+	// check reaction against the status message
 	nowPlaying, ok := gsvc.player.NowPlaying()
-	if ok && evt.ChannelID == nowPlaying.StatusMessageChannelID && evt.MessageID == nowPlaying.StatusMessageID {
+	if ok &&
+		evt.Reaction.ChannelID == nowPlaying.StatusMessageChannelID &&
+		evt.Reaction.MessageID == nowPlaying.StatusMessageID {
 		for _, cmd := range gsvc.commands {
-			if cmd.shortcut == evt.Body {
-				// no error response or success ack
-				_ = cmd.run(gsvc, evt, []string{})
+			if cmd.shortcut == emoji {
+				cmd.run(gsvc, evt.pseudoMessageEvent(), []string{})
 				return
 			}
 		}
 	}
 
-	if requeue.shortcut != evt.Body {
+	if requeue.shortcut != emoji {
 		return
 	}
 
 	// react event does not have full message struct, try to recover the message
-	msg, err := gsvc.discord.State.Message(evt.ChannelID, evt.MessageID)
+	msg, err := gsvc.discord.State.Message(evt.Reaction.ChannelID, evt.Reaction.MessageID)
 	if err != nil {
-		msg, err = gsvc.discord.ChannelMessage(evt.ChannelID, evt.MessageID)
+		msg, err = gsvc.discord.ChannelMessage(evt.Reaction.ChannelID, evt.Reaction.MessageID)
 		if err != nil {
 			return
 		}
@@ -264,13 +293,8 @@ func (gsvc *GuildService) HandleReactEvent(evt GuildEvent) {
 
 	if requeueable(msg) {
 		// act as though the reacted message event happened again
-		gsvc.HandleMessageEvent(GuildEvent{
-			Type:      MessageEvent,
-			GuildID:   evt.GuildID,
-			ChannelID: evt.ChannelID,
-			MessageID: msg.ID,
-			AuthorID:  msg.Author.ID,
-			Body:      msg.Content,
+		gsvc.HandleMessageEvent(MessageEvent{
+			Message: msg,
 		})
 	}
 }
