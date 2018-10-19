@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"net/url"
@@ -11,6 +12,10 @@ import (
 type Plugin interface {
 	CanHandle(string) bool
 	Resolve(string) (Metadata, error)
+}
+
+type VideoPlugin interface {
+	Plugin
 }
 
 type Metadata struct {
@@ -53,7 +58,7 @@ func streamlinkOpener(url string, format string) func() (io.ReadCloser, error) {
 	return func() (io.ReadCloser, error) {
 		streamlink := exec.Command(
 			"streamlink",
-			"-O",
+			"-O", // tells streamlink to write to stdout
 			url,
 			format,
 		)
@@ -79,5 +84,53 @@ func (slrc streamlinkReadCloser) Close() error {
 	log.Printf("killed streamlink %v", err)
 	err = slrc.streamlink.Wait()
 	log.Printf("closed streamlink %v", err)
+	return err
+}
+
+// produce a second stream of images from the source, if the source supports it
+func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (io.ReadCloser, error) {
+	return func() (io.ReadCloser, error) {
+		src, err := openSrc()
+		if err != nil {
+			return nil, err
+		}
+
+		// a read from tee causes the same read to be available on buf
+		// when the player reads from tee it will fork the source and make the same bytes available to ffmpeg
+		buf := &bytes.Buffer{}
+		tee := io.TeeReader(src, buf)
+
+		ffmpeg := exec.Command(
+			"ffmpeg",
+			"-i", "pipe:0", // tells ffmpeg to read from stdin
+			"-f", "image2",
+			"-vf", "fps=1/5", // one image every 5 seconds
+			"-update", "1", // tells ffmpeg to continuously overwrite the image
+			"pipe:1", // tells ffmpeg to write to stdout
+		)
+		ffmpeg.Stdin = buf
+		stdout, err := ffmpeg.StdoutPipe()
+		// TODO stdout is a stream of video frames
+		if err != nil {
+			return nil, err
+		}
+		_ = stdout
+
+		return splitVideoReadCloser{Reader: tee, orig: src, ffmpeg: ffmpeg}, nil
+	}
+}
+
+type splitVideoReadCloser struct {
+	io.Reader
+	orig   io.Closer
+	ffmpeg *exec.Cmd
+}
+
+func (svrc splitVideoReadCloser) Close() error {
+	svrc.orig.Close()
+	err := svrc.ffmpeg.Process.Kill()
+	log.Printf("killed forked video ffmpeg %v", err)
+	err = svrc.ffmpeg.Wait()
+	log.Printf("closed forked video ffmpeg %v", err)
 	return err
 }
