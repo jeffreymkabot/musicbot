@@ -69,21 +69,30 @@ type guildPlayer struct {
 // NewGuildPlayer creates a GuildPlayer resource for a discord guild.
 // Existing open GuildPlayers for the same guild should be closed before making a new one to avoid interference.
 func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID string, cmdShortcuts []string) GuildPlayer {
+	gp := &guildPlayer{
+		guildID:      guildID,
+		discord:      discord,
+		device:       discordvoice.New(discord, guildID, 150*time.Millisecond),
+		Player:       nil,
+		cmdShortcuts: cmdShortcuts,
+	}
+	// clear the current status message and join the idle channel
 	idle := func() {
+		gp.clearStatusMessage()
 		if discordvoice.ValidVoiceChannel(discord, idleChannelID) {
 			discord.ChannelVoiceJoin(guildID, idleChannelID, false, true)
 		}
 	}
-	return &guildPlayer{
-		guildID: guildID,
-		discord: discord,
-		device:  discordvoice.New(discord, guildID, 150*time.Millisecond),
-		Player: player.New(
-			player.QueueLength(10),
-			player.IdleFunc(idle, 1000),
-		),
-		cmdShortcuts: cmdShortcuts,
-	}
+	gp.Player = player.New(
+		player.QueueLength(10),
+		player.IdleFunc(idle, 1000),
+	)
+	return gp
+}
+
+func (gp *guildPlayer) Close() error {
+	gp.clearStatusMessage()
+	return gp.Player.Close()
 }
 
 func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.Metadata, loudness float64) error {
@@ -93,9 +102,8 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 
 	log.Printf("put %v", md.Title)
 
-	statusChannelID, statusMessageID := evt.Message.ChannelID, ""
+	statusChannelID := evt.Message.ChannelID
 	statusEmbed := statusEmbedFunc()
-	updateStatus := updateStatusFunc(gp, md, statusChannelID)
 
 	// possibly set by reference in openSrc defined below
 	// TODO use video stream in messageEmbed
@@ -124,33 +132,28 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 		player.Duration(md.Duration),
 		player.OnStart(func() {
 			embed := statusEmbed(embedConfig{md.Title, true, md.Duration, 0, nil, gp.Playlist()})
-			statusMessageID = updateStatus(embed, statusMessageID)
+			go gp.updateStatusMessage(statusChannelID, embed, md)
 		}),
 		player.OnPause(func(d time.Duration) {
 			embed := statusEmbed(embedConfig{md.Title, false, md.Duration, d, nil, gp.Playlist()})
-			statusMessageID = updateStatus(embed, statusMessageID)
+			go gp.updateStatusMessage(statusChannelID, embed, md)
 		}),
 		player.OnResume(func(d time.Duration) {
 			embed := statusEmbed(embedConfig{md.Title, true, md.Duration, d, nil, gp.Playlist()})
-			statusMessageID = updateStatus(embed, statusMessageID)
+			go gp.updateStatusMessage(statusChannelID, embed, md)
 		}),
 		player.OnProgress(
 			func(d time.Duration, frameTimes []time.Duration) {
 				embed := statusEmbed(embedConfig{md.Title, true, md.Duration, d, frameTimes, gp.Playlist()})
-				statusMessageID = updateStatus(embed, statusMessageID)
+				go gp.updateStatusMessage(statusChannelID, embed, md)
 			},
 			5*time.Second,
 		),
 		player.OnEnd(func(d time.Duration, err error) {
 			log.Printf("read %v of %v, expected %v", d, md.Title, md.Duration)
 			log.Printf("reason: %v", err)
-			// clean up player status message and video stream if it was opened
-			if statusMessageID != "" {
-				gp.discord.ChannelMessageDelete(statusChannelID, statusMessageID)
-				gp.mu.Lock()
-				gp.nowPlaying = Play{}
-				gp.mu.Unlock()
-			}
+			// clean up video stream if it was opened
+			// status message is cleaned up when player's idleFunc is called or when player is closed
 			if videoStream != nil {
 				log.Print("closing video stream")
 				videoStream.Close()
@@ -158,6 +161,75 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 			gp.discord.MessageReactionAdd(evt.Message.ChannelID, evt.Message.ID, requeue.shortcut)
 		}),
 	)
+}
+
+// call this in a separate goroutine than discordvoice#sender since it makes blocking http requests
+func (gp *guildPlayer) updateStatusMessage(channelID string, embed *discordgo.MessageEmbed, md plugins.Metadata) error {
+	gp.mu.Lock()
+	chID, msgID := gp.nowPlaying.StatusMessageChannelID, gp.nowPlaying.StatusMessageID
+	gp.mu.Unlock()
+
+	// clear and recreate status message if it is in a different channel
+	// or if it not the most recent message in the current channel
+	exists := chID != "" && msgID != ""
+	tooFarBack := func() bool {
+		msgs, err := gp.discord.ChannelMessages(chID, 1, "", msgID, "")
+		return err != nil || len(msgs) > 0
+	}
+	if exists && (chID != channelID || tooFarBack()) {
+		gp.clearStatusMessage()
+		exists = false
+	}
+
+	if !exists {
+		msg, err := gp.discord.ChannelMessageSendEmbed(channelID, embed)
+		if err != nil {
+			log.Printf("failed to display player status %v", err)
+			return err
+		}
+		gp.mu.Lock()
+		gp.nowPlaying = Play{
+			Metadata:               md,
+			StatusMessageChannelID: msg.ChannelID,
+			StatusMessageID:        msg.ID,
+		}
+		gp.mu.Unlock()
+
+		for _, emoji := range gp.cmdShortcuts {
+			if err := gp.discord.MessageReactionAdd(channelID, msg.ID, emoji); err != nil {
+				log.Printf("failed to attach cmd shortcut to player status %v", err)
+			}
+		}
+
+		return nil
+	}
+
+	msg, err := gp.discord.ChannelMessageEditEmbed(channelID, msgID, embed)
+	if err != nil {
+		log.Printf("failed to edit player status %v", err)
+		return err
+	}
+	gp.mu.Lock()
+	gp.nowPlaying = Play{
+		Metadata:               md,
+		StatusMessageChannelID: msg.ChannelID,
+		StatusMessageID:        msg.ID,
+	}
+	gp.mu.Unlock()
+
+	return nil
+}
+
+func (gp *guildPlayer) clearStatusMessage() error {
+	gp.mu.Lock()
+	chID, msgID := gp.nowPlaying.StatusMessageChannelID, gp.nowPlaying.StatusMessageID
+	gp.nowPlaying = Play{}
+	gp.mu.Unlock()
+
+	if chID == "" || msgID == "" {
+		return nil
+	}
+	return gp.discord.ChannelMessageDelete(chID, msgID)
 }
 
 func openSrcFunc(openFunc func() (io.ReadCloser, error), loudness float64) player.SourceOpenerFunc {
@@ -214,42 +286,6 @@ func statusEmbedFunc() func(cfg embedConfig) *discordgo.MessageEmbed {
 			embed.Footer.Text = fmt.Sprintf("avg %.3fms, dev %.3fms, max %.3fms, min %.3fms", avg, dev, max, min)
 		}
 		return embed
-	}
-}
-
-func updateStatusFunc(gp *guildPlayer, md plugins.Metadata, channelID string) func(*discordgo.MessageEmbed, string) string {
-	return func(embed *discordgo.MessageEmbed, messageID string) string {
-		if messageID == "" {
-			msg, err := gp.discord.ChannelMessageSendEmbed(channelID, embed)
-			if err != nil {
-				log.Printf("failed to display player status %v", err)
-				return ""
-			}
-
-			gp.mu.Lock()
-			gp.nowPlaying = Play{
-				Metadata:               md,
-				StatusMessageChannelID: msg.ChannelID,
-				StatusMessageID:        msg.ID,
-			}
-			gp.mu.Unlock()
-
-			for _, emoji := range gp.cmdShortcuts {
-				if err := gp.discord.MessageReactionAdd(channelID, msg.ID, emoji); err != nil {
-					log.Printf("failed to attach cmd shortcut to player status %v", err)
-				}
-			}
-			return msg.ID
-		}
-
-		// edit message in separate goroutine so the edit http request does not  interfere with audio playback
-		go func() {
-			_, err := gp.discord.ChannelMessageEditEmbed(channelID, messageID, embed)
-			if err != nil {
-				log.Printf("failed to refresh player status %v", err)
-			}
-		}()
-		return messageID
 	}
 }
 
