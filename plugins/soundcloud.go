@@ -85,7 +85,7 @@ func (sct soundcloudTrack) Metadata(clientID string) (md Metadata, err error) {
 	md = Metadata{
 		Title:    sct.Title,
 		Duration: time.Duration(sct.Duration) * time.Millisecond,
-		OpenFunc: func() (io.ReadCloser, error) {
+		OpenAudioStream: func() (io.ReadCloser, error) {
 			resp, err := http.Get(dlUrl + "?" + query.Encode())
 			return resp.Body, err
 		},

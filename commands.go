@@ -70,7 +70,19 @@ func runPlugin(plugin plugins.Plugin, arg string) serviceFunc {
 		gsvc.discord.MessageReactionAdd(evt.Message.ChannelID, evt.Message.ID, "🔎")
 		defer gsvc.discord.MessageReactionRemove(evt.Message.ChannelID, evt.Message.ID, "🔎", "@me")
 
-		md, err := plugin.Resolve(arg)
+		var md plugins.Metadata
+		var err error
+		var vp plugins.VideoPlugin
+		var ok bool
+
+		// resolve video plugin if supported
+		// fall back to regular plugin if not supported, or error resolving video
+		if vp, ok = plugin.(plugins.VideoPlugin); ok {
+			md, err = vp.ResolveWithVideo(arg)
+		}
+		if !ok || err != nil {
+			md, err = plugin.Resolve(arg)
+		}
 		if err != nil {
 			return errors.Wrap(err, "failed to resolve openable stream")
 		}

@@ -7,7 +7,9 @@ import (
 
 var urlRegexpTw = regexp.MustCompile(`twitch\.tv`)
 
-type Twitch struct{}
+type Twitch struct{
+	Streamlink
+}
 
 func (tw Twitch) CanHandle(arg string) bool {
 	url, err := url.Parse(arg)
@@ -17,10 +19,11 @@ func (tw Twitch) CanHandle(arg string) bool {
 func (tw Twitch) Resolve(arg string) (md Metadata, err error) {
 	// TODO request the twitch api to see if the user is even online and return a pleasant error
 	// also request the twitch api to learn the title of the user's broadcast
-	md = Metadata{
-		Title:    arg,
-		Duration: 0,
-		OpenFunc: streamlinkOpener(arg, "audio_only,480p,720p,best"),
-	}
-	return
+	return tw.Streamlink.Resolve(arg)
+}
+
+func (tw Twitch) ResolveWithVideo(arg string) (md Metadata, err error) {
+	// TODO request the twitch api to see if the user is even online and return a pleasant error
+	// also request the twitch api to learn the title of the user's broadcast
+	return tw.Streamlink.ResolveWithVideo(arg)
 }

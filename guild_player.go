@@ -97,9 +97,29 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 	statusEmbed := statusEmbedFunc()
 	updateStatus := updateStatusFunc(gp, md, statusChannelID)
 
+	// possibly set by reference in openSrc defined below
+	// TODO use video stream in messageEmbed
+	var videoStream io.ReadCloser
+
+	// open separate video stream if supported
+	// fall back to audio stream if not supported or error opening video stream
+	openSrc := md.OpenAudioStream
+	if md.OpenAudioVideoStreams != nil {
+		openSrc = func() (io.ReadCloser, error) {
+			audio, video, err := md.OpenAudioVideoStreams()
+			if err != nil {
+				log.Printf("failed to separate video stream %v", err)
+				log.Print("falling back to just an audio stream")
+				return md.OpenAudioStream()
+			}
+			videoStream = video
+			return audio, nil
+		}
+	}
+
 	return gp.Enqueue(
 		md.Title,
-		openSrcFunc(md.OpenFunc, loudness),
+		openSrcFunc(openSrc, loudness),
 		openDstFunc(gp.device, voiceChannelID),
 		player.Duration(md.Duration),
 		player.OnStart(func() {
@@ -124,11 +144,16 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 		player.OnEnd(func(d time.Duration, err error) {
 			log.Printf("read %v of %v, expected %v", d, md.Title, md.Duration)
 			log.Printf("reason: %v", err)
+			// clean up player status message and video stream if it was opened
 			if statusMessageID != "" {
 				gp.discord.ChannelMessageDelete(statusChannelID, statusMessageID)
 				gp.mu.Lock()
 				gp.nowPlaying = Play{}
 				gp.mu.Unlock()
+			}
+			if videoStream != nil {
+				log.Print("closing video stream")
+				videoStream.Close()
 			}
 			gp.discord.MessageReactionAdd(evt.Message.ChannelID, evt.Message.ID, requeue.shortcut)
 		}),

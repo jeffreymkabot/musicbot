@@ -27,9 +27,9 @@ func (yt Youtube) Resolve(arg string) (md Metadata, err error) {
 	if info.Livestream {
 		// found that audio_mp4 format always cut out after 2seconds
 		md = Metadata{
-			Title:    info.Title,
-			Duration: info.Duration,
-			OpenFunc: streamlinkOpener(arg, "480p,720p,best"),
+			Title:           info.Title,
+			Duration:        info.Duration,
+			OpenAudioStream: streamlinkOpener(arg, "480p,720p,best"),
 		}
 		return
 	}
@@ -42,10 +42,18 @@ func (yt Youtube) Resolve(arg string) (md Metadata, err error) {
 	md = Metadata{
 		Title:    info.Title,
 		Duration: info.Duration,
-		OpenFunc: func() (io.ReadCloser, error) {
+		OpenAudioStream: func() (io.ReadCloser, error) {
 			resp, err := http.Get(dlUrl.String())
 			return resp.Body, err
 		},
+	}
+	return
+}
+
+func (yt Youtube) ResolveWithVideo(arg string) (md Metadata, err error) {
+	md, err = yt.Resolve(arg)
+	if err == nil {
+		md.OpenAudioVideoStreams = splitVideoStream(md.OpenAudioStream)
 	}
 	return
 }

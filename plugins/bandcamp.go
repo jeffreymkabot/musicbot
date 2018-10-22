@@ -58,7 +58,7 @@ func (bc Bandcamp) Resolve(arg string) (md Metadata, err error) {
 	md = Metadata{
 		Title:    trackinfoJson.Title,
 		Duration: dur,
-		OpenFunc: func() (io.ReadCloser, error) {
+		OpenAudioStream: func() (io.ReadCloser, error) {
 			resp, err := http.Get(trackinfoJson.File.URL)
 			return resp.Body, err
 		},

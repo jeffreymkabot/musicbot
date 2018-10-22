@@ -16,12 +16,14 @@ type Plugin interface {
 
 type VideoPlugin interface {
 	Plugin
+	ResolveWithVideo(string) (Metadata, error)
 }
 
 type Metadata struct {
-	Title    string
-	Duration time.Duration
-	OpenFunc func() (io.ReadCloser, error)
+	Title                 string
+	Duration              time.Duration
+	OpenAudioStream       func() (io.ReadCloser, error)
+	OpenAudioVideoStreams func() (audio io.ReadCloser, video io.ReadCloser, err error)
 }
 
 // Streamlink is a generic plugin capable of handling a large variety of urls.
@@ -47,7 +49,18 @@ func (sl Streamlink) Resolve(arg string) (md Metadata, err error) {
 		Title:    arg,
 		Duration: 0,
 		// guess at the name of audio only streams that might be available
-		OpenFunc: streamlinkOpener(arg, "audio,audio_only,480p,720p,best"),
+		OpenAudioStream: streamlinkOpener(arg, "audio,audio_only,480p,720p,best"),
+	}
+	return
+}
+
+func (sl Streamlink) ResolveWithVideo(arg string) (md Metadata, err error) {
+	openStream := streamlinkOpener(arg, "480p,720p,best")
+	md = Metadata{
+		Title:                 arg,
+		Duration:              0,
+		OpenAudioStream:       openStream,
+		OpenAudioVideoStreams: splitVideoStream(openStream),
 	}
 	return
 }
@@ -87,16 +100,20 @@ func (slrc streamlinkReadCloser) Close() error {
 	return err
 }
 
-// produce a second stream of images from the source, if the source supports it
-func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (io.ReadCloser, error) {
-	return func() (io.ReadCloser, error) {
+// produce a separate stream of images sampled from the base stream
+// the image stream is synchronized with the base stream
+// the image stream can be closed without affecting the base stream
+// but closing the base stream will stop the image stream
+func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (audio io.ReadCloser, videoSamples io.ReadCloser, err error) {
+	return func() (audio io.ReadCloser, videoSamples io.ReadCloser, err error) {
 		src, err := openSrc()
 		if err != nil {
-			return nil, err
+			return
 		}
 
-		// a read from tee causes the same read to be available on buf
-		// when the player reads from tee it will fork the source and make the same bytes available to ffmpeg
+		// reads from src stream copy their bytes into buf
+		// a separate ffmpeg reads from buf and outputs sampled images to ffmpeg's stdout
+
 		buf := &bytes.Buffer{}
 		tee := io.TeeReader(src, buf)
 
@@ -109,28 +126,43 @@ func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (io.ReadClos
 			"pipe:1", // tells ffmpeg to write to stdout
 		)
 		ffmpeg.Stdin = buf
+		// stdout gets closed when ffmpeg.Wait() is called
 		stdout, err := ffmpeg.StdoutPipe()
-		// TODO stdout is a stream of video frames
 		if err != nil {
-			return nil, err
+			src.Close()
+			return
 		}
-		_ = stdout
+		if err = ffmpeg.Start(); err != nil {
+			src.Close()
+			return
+		}
 
-		return splitVideoReadCloser{Reader: tee, orig: src, ffmpeg: ffmpeg}, nil
+		audio = struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: tee,
+			Closer: src,
+		}
+		videoSamples = videoSampleReadCloser{
+			Reader: stdout,
+			ffmpeg: ffmpeg,
+		}
+		log.Printf("started ffmpeg to sample images from stream")
+		return
 	}
 }
 
-type splitVideoReadCloser struct {
+type videoSampleReadCloser struct {
 	io.Reader
-	orig   io.Closer
 	ffmpeg *exec.Cmd
 }
 
-func (svrc splitVideoReadCloser) Close() error {
-	svrc.orig.Close()
-	err := svrc.ffmpeg.Process.Kill()
-	log.Printf("killed forked video ffmpeg %v", err)
-	err = svrc.ffmpeg.Wait()
-	log.Printf("closed forked video ffmpeg %v", err)
+func (vsrc videoSampleReadCloser) Close() error {
+	err := vsrc.ffmpeg.Process.Kill()
+	log.Printf("killed ffmpeg video sampler %v", err)
+	// ffmpeg.Wait() also closes ffmpeg's StdoutPipe
+	err = vsrc.ffmpeg.Wait()
+	log.Printf("closed ffmpeg video sampler %v", err)
 	return err
 }
