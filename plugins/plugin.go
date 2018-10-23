@@ -1,7 +1,6 @@
 package plugins
 
 import (
-	"bytes"
 	"io"
 	"log"
 	"net/url"
@@ -102,8 +101,8 @@ func (slrc streamlinkReadCloser) Close() error {
 
 // produce a separate stream of images sampled from the base stream
 // the image stream is synchronized with the base stream
-// the image stream can be closed without affecting the base stream
-// but closing the base stream will stop the image stream
+
+// TODO this is really inefficient and causes latency issues with audio stream
 func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (audio io.ReadCloser, videoSamples io.ReadCloser, err error) {
 	return func() (audio io.ReadCloser, videoSamples io.ReadCloser, err error) {
 		src, err := openSrc()
@@ -111,11 +110,10 @@ func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (audio io.Re
 			return
 		}
 
-		// reads from src stream copy their bytes into buf
-		// a separate ffmpeg reads from buf and outputs sampled images to ffmpeg's stdout
-
-		buf := &bytes.Buffer{}
-		tee := io.TeeReader(src, buf)
+		// reads from tee copy their bytes into writer
+		// a separate ffmpeg reads from other end of writer pipe and outputs sampled images to ffmpeg's stdout
+		reader, writer := io.Pipe()
+		tee := io.TeeReader(src, writer)
 
 		ffmpeg := exec.Command(
 			"ffmpeg",
@@ -125,7 +123,7 @@ func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (audio io.Re
 			"-update", "1", // tells ffmpeg to continuously overwrite the image
 			"pipe:1", // tells ffmpeg to write to stdout
 		)
-		ffmpeg.Stdin = buf
+		ffmpeg.Stdin = reader
 		// stdout gets closed when ffmpeg.Wait() is called
 		stdout, err := ffmpeg.StdoutPipe()
 		if err != nil {
@@ -146,6 +144,7 @@ func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (audio io.Re
 		}
 		videoSamples = videoSampleReadCloser{
 			Reader: stdout,
+			pr:     reader,
 			ffmpeg: ffmpeg,
 		}
 		log.Printf("started ffmpeg to sample images from stream")
@@ -155,12 +154,15 @@ func splitVideoStream(openSrc func() (io.ReadCloser, error)) func() (audio io.Re
 
 type videoSampleReadCloser struct {
 	io.Reader
+	pr     *io.PipeReader
 	ffmpeg *exec.Cmd
 }
 
 func (vsrc videoSampleReadCloser) Close() error {
 	err := vsrc.ffmpeg.Process.Kill()
 	log.Printf("killed ffmpeg video sampler %v", err)
+	// close source ffmpeg's stdin so the process can exit
+	vsrc.pr.Close()
 	// ffmpeg.Wait() also closes ffmpeg's StdoutPipe
 	err = vsrc.ffmpeg.Wait()
 	log.Printf("closed ffmpeg video sampler %v", err)

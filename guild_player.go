@@ -3,12 +3,17 @@ package musicbot
 import (
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/jpeg"
 	"io"
 	"log"
 	"math"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/image/draw"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/jeffreymkabot/discordvoice"
@@ -59,11 +64,11 @@ type guildPlayer struct {
 	device  *discordvoice.Device
 	*player.Player
 	cmdShortcuts []string
-	mu           sync.Mutex
-	// TODO how to manage nowPlaying state in a reasonable way without mutex?
+	mu           sync.Mutex // protect statusMessageRef
+	// TODO how to manage statusMessageRef state in a reasonable way without mutex?
 	// player state controlled by discordvoice#sender goroutine
 	// guild state controlled by musicbot#Guild goroutine
-	nowPlaying Play
+	statusMessageRef Play
 }
 
 // NewGuildPlayer creates a GuildPlayer resource for a discord guild.
@@ -102,27 +107,38 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 
 	log.Printf("put %v", md.Title)
 
-	statusChannelID := evt.Message.ChannelID
-	statusEmbed := statusEmbedFunc()
-
-	// possibly set by reference in openSrc defined below
-	// TODO use video stream in messageEmbed
-	var videoStream io.ReadCloser
-
-	// open separate video stream if supported
+	// prefer to open separate video stream
 	// fall back to audio stream if not supported or error opening video stream
-	openSrc := md.OpenAudioStream
-	if md.OpenAudioVideoStreams != nil {
-		openSrc = func() (io.ReadCloser, error) {
-			audio, video, err := md.OpenAudioVideoStreams()
-			if err != nil {
-				log.Printf("failed to separate video stream %v", err)
-				log.Print("falling back to just an audio stream")
-				return md.OpenAudioStream()
-			}
-			videoStream = video
-			return audio, nil
+	var videoStream io.ReadCloser
+	openSrc := func() (io.ReadCloser, error) {
+		if md.OpenAudioVideoStreams == nil {
+			return md.OpenAudioStream()
 		}
+
+		audio, video, err := md.OpenAudioVideoStreams()
+		if err != nil {
+			log.Printf("failed to separate video stream %v", err)
+			log.Print("falling back to just an audio stream")
+			return md.OpenAudioStream()
+		}
+		log.Printf("%#v", video)
+		videoStream = video
+		return audio, nil
+	}
+
+	statusChannelID := evt.Message.ChannelID
+	embed := &discordgo.MessageEmbed{
+		Color:  0xa680ee,
+		Footer: &discordgo.MessageEmbedFooter{},
+	}
+	state := embedConfig{
+		title:    md.Title,
+		duration: md.Duration,
+	}
+	onStateChange := func(state embedConfig, video io.Reader) {
+		state.image = video
+		statusEmbed(embed, state)
+		gp.updateStatusMessage(statusChannelID, embed, md)
 	}
 
 	return gp.Enqueue(
@@ -131,26 +147,31 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 		openDstFunc(gp.device, voiceChannelID),
 		player.Duration(md.Duration),
 		player.OnStart(func() {
-			embed := statusEmbed(embedConfig{md.Title, true, md.Duration, 0, nil, gp.Playlist()})
-			go gp.updateStatusMessage(statusChannelID, embed, md)
+			go onStateChange(state, videoStream)
 		}),
-		player.OnPause(func(d time.Duration) {
-			embed := statusEmbed(embedConfig{md.Title, false, md.Duration, d, nil, gp.Playlist()})
-			go gp.updateStatusMessage(statusChannelID, embed, md)
+		player.OnPause(func(elapsed time.Duration) {
+			state.paused = true
+			state.elapsed = elapsed
+			state.playlist = gp.Playlist()
+			go onStateChange(state, nil)
 		}),
-		player.OnResume(func(d time.Duration) {
-			embed := statusEmbed(embedConfig{md.Title, true, md.Duration, d, nil, gp.Playlist()})
-			go gp.updateStatusMessage(statusChannelID, embed, md)
+		player.OnResume(func(elapsed time.Duration) {
+			state.paused = false
+			state.elapsed = elapsed
+			state.playlist = gp.Playlist()
+			go onStateChange(state, nil)
 		}),
 		player.OnProgress(
-			func(d time.Duration, frameTimes []time.Duration) {
-				embed := statusEmbed(embedConfig{md.Title, true, md.Duration, d, frameTimes, gp.Playlist()})
-				go gp.updateStatusMessage(statusChannelID, embed, md)
+			func(elapsed time.Duration, frameTimes []time.Duration) {
+				state.frameTimes = frameTimes
+				state.elapsed = elapsed
+				state.playlist = gp.Playlist()
+				go onStateChange(state, videoStream)
 			},
 			5*time.Second,
 		),
-		player.OnEnd(func(d time.Duration, err error) {
-			log.Printf("read %v of %v, expected %v", d, md.Title, md.Duration)
+		player.OnEnd(func(elapsed time.Duration, err error) {
+			log.Printf("read %v of %v, expected %v", elapsed, md.Title, md.Duration)
 			log.Printf("reason: %v", err)
 			// clean up video stream if it was opened
 			// status message is cleaned up when player's idleFunc is called or when player is closed
@@ -166,17 +187,16 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 // call this in a separate goroutine than discordvoice#sender since it makes blocking http requests
 func (gp *guildPlayer) updateStatusMessage(channelID string, embed *discordgo.MessageEmbed, md plugins.Metadata) error {
 	gp.mu.Lock()
-	chID, msgID := gp.nowPlaying.StatusMessageChannelID, gp.nowPlaying.StatusMessageID
+	chID, msgID := gp.statusMessageRef.StatusMessageChannelID, gp.statusMessageRef.StatusMessageID
 	gp.mu.Unlock()
 
-	// clear and recreate status message if it is in a different channel
-	// or if it not the most recent message in the current channel
 	exists := chID != "" && msgID != ""
+	differentChannel := chID != channelID
 	tooFarBack := func() bool {
 		msgs, err := gp.discord.ChannelMessages(chID, 1, "", msgID, "")
 		return err != nil || len(msgs) > 0
 	}
-	if exists && (chID != channelID || tooFarBack()) {
+	if exists && (differentChannel || tooFarBack()) {
 		gp.clearStatusMessage()
 		exists = false
 	}
@@ -187,8 +207,9 @@ func (gp *guildPlayer) updateStatusMessage(channelID string, embed *discordgo.Me
 			log.Printf("failed to display player status %v", err)
 			return err
 		}
+
 		gp.mu.Lock()
-		gp.nowPlaying = Play{
+		gp.statusMessageRef = Play{
 			Metadata:               md,
 			StatusMessageChannelID: msg.ChannelID,
 			StatusMessageID:        msg.ID,
@@ -196,34 +217,33 @@ func (gp *guildPlayer) updateStatusMessage(channelID string, embed *discordgo.Me
 		gp.mu.Unlock()
 
 		for _, emoji := range gp.cmdShortcuts {
-			if err := gp.discord.MessageReactionAdd(channelID, msg.ID, emoji); err != nil {
+			if err := gp.discord.MessageReactionAdd(msg.ChannelID, msg.ID, emoji); err != nil {
 				log.Printf("failed to attach cmd shortcut to player status %v", err)
 			}
 		}
+	} else {
+		msg, err := gp.discord.ChannelMessageEditEmbed(channelID, msgID, embed)
+		if err != nil {
+			log.Printf("failed to edit player status %v", err)
+			return err
+		}
 
-		return nil
+		gp.mu.Lock()
+		gp.statusMessageRef = Play{
+			Metadata:               md,
+			StatusMessageChannelID: msg.ChannelID,
+			StatusMessageID:        msg.ID,
+		}
+		gp.mu.Unlock()
 	}
-
-	msg, err := gp.discord.ChannelMessageEditEmbed(channelID, msgID, embed)
-	if err != nil {
-		log.Printf("failed to edit player status %v", err)
-		return err
-	}
-	gp.mu.Lock()
-	gp.nowPlaying = Play{
-		Metadata:               md,
-		StatusMessageChannelID: msg.ChannelID,
-		StatusMessageID:        msg.ID,
-	}
-	gp.mu.Unlock()
 
 	return nil
 }
 
 func (gp *guildPlayer) clearStatusMessage() error {
 	gp.mu.Lock()
-	chID, msgID := gp.nowPlaying.StatusMessageChannelID, gp.nowPlaying.StatusMessageID
-	gp.nowPlaying = Play{}
+	chID, msgID := gp.statusMessageRef.StatusMessageChannelID, gp.statusMessageRef.StatusMessageID
+	gp.statusMessageRef = Play{}
 	gp.mu.Unlock()
 
 	if chID == "" || msgID == "" {
@@ -254,48 +274,106 @@ func openDstFunc(device *discordvoice.Device, channelID string) player.DeviceOpe
 
 type embedConfig struct {
 	title      string
-	playing    bool
+	paused     bool
 	duration   time.Duration
 	elapsed    time.Duration
 	frameTimes []time.Duration
 	playlist   []string
+	image      io.Reader
 }
 
-func statusEmbedFunc() func(cfg embedConfig) *discordgo.MessageEmbed {
-	embed := &discordgo.MessageEmbed{
-		Color:  0xa680ee,
-		Footer: &discordgo.MessageEmbedFooter{},
+func statusEmbed(embed *discordgo.MessageEmbed, state embedConfig) *discordgo.MessageEmbed {
+	playPaused := "▶️"
+	if state.paused {
+		playPaused = "⏸️"
 	}
-	return func(cfg embedConfig) *discordgo.MessageEmbed {
-		playPaused := "▶️"
-		if !cfg.playing {
-			playPaused = "⏸️"
+	embed.Title = playPaused + " " + state.title
+
+	desc := &strings.Builder{}
+	desc.WriteString(prettyTime(state.elapsed) + "/" + prettyTime(state.duration))
+
+	if state.image != nil {
+		img, _, err := image.Decode(state.image)
+		if err == nil {
+			// TODO determine optimal values
+			asciiString := ascii(grayscale(resize(img, 30, 15)))
+			desc.WriteString("```\n")
+			desc.WriteString(asciiString)
+			desc.WriteString("\n```")
+		} else {
+			log.Printf("failed to decode image %v", err)
 		}
-		embed.Title = playPaused + " " + cfg.title
-		embed.Description = prettyTime(cfg.elapsed) + "/" + prettyTime(cfg.duration)
-		if len(cfg.playlist) > 0 {
-			embed.Fields = []*discordgo.MessageEmbedField{
-				&discordgo.MessageEmbedField{
-					Name:  "Playlist",
-					Value: strings.Join(cfg.playlist, "\n"),
-				},
-			}
-		}
-		if len(cfg.frameTimes) > 0 {
-			avg, dev, max, min := statistics(latenciesAsFloat(cfg.frameTimes))
-			embed.Footer.Text = fmt.Sprintf("avg %.3fms, dev %.3fms, max %.3fms, min %.3fms", avg, dev, max, min)
-		}
-		return embed
 	}
+
+	embed.Description = desc.String()
+
+	if len(state.playlist) > 0 {
+		embed.Fields = []*discordgo.MessageEmbedField{
+			&discordgo.MessageEmbedField{
+				Name:  "Playlist",
+				Value: strings.Join(state.playlist, "\n"),
+			},
+		}
+	}
+
+	if len(state.frameTimes) > 0 {
+		if embed.Footer == nil {
+			embed.Footer = &discordgo.MessageEmbedFooter{}
+		}
+		avg, dev, max, min := statistics(latenciesAsFloat(state.frameTimes))
+		embed.Footer.Text = fmt.Sprintf("avg %.3fms, dev %.3fms, max %.3fms, min %.3fms", avg, dev, max, min)
+	}
+
+	return embed
 }
 
 func (gp *guildPlayer) NowPlaying() (play Play, ok bool) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
-	if gp.nowPlaying.StatusMessageID == "" {
+	if gp.statusMessageRef.StatusMessageID == "" {
 		return Play{}, false
 	}
-	return gp.nowPlaying, true
+	return gp.statusMessageRef, true
+}
+
+// values taken from golang.org/pkg/image/draw example
+// colorset and charset need the same length
+var colorset = []color.Color{
+	color.Gray{Y: 255},
+	color.Gray{Y: 160},
+	color.Gray{Y: 70},
+	color.Gray{Y: 35},
+	color.Gray{Y: 0},
+}
+var charset = []rune{' ', '░', '▒', '▓', '█'}
+
+// resize the source image
+func resize(src image.Image, width, height int) image.Image {
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+	return dst
+}
+
+// produce a grayscale version of the original image (uses colorset's colors)
+func grayscale(src image.Image) *image.Paletted {
+	paletteImg := image.NewPaletted(src.Bounds(), colorset)
+	draw.FloydSteinberg.Draw(paletteImg, paletteImg.Bounds(), src, image.ZP)
+	return paletteImg
+}
+
+// produce an ascii representation of a grayscale image (uses charset's chars)
+func ascii(img *image.Paletted) string {
+	buf := &strings.Builder{}
+	width := img.Rect.Bounds().Dx()
+	// img.Pix is a flattened slice, where each value is the index of a color in img's palette
+	for i, idx := range img.Pix {
+		buf.WriteRune(charset[idx])
+		// write a newline when next index would be a new row of pixels
+		if (i+1)%width == 0 {
+			buf.WriteRune('\n')
+		}
+	}
+	return buf.String()
 }
 
 func prettyTime(t time.Duration) string {
