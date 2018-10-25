@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jeffreymkabot/musicbot/status"
+
 	"github.com/bwmarrin/discordgo"
 	"github.com/jeffreymkabot/musicbot/plugins"
 )
@@ -106,6 +108,7 @@ type GuildService struct {
 	player       GuildPlayer
 	commands     []command
 	plugins      []plugins.Plugin
+	buttons      []status.Button
 }
 
 // GuildStorage persists and retrieves guild configuration.
@@ -134,7 +137,7 @@ func NewGuild(
 	guild *discordgo.Guild,
 	discord *discordgo.Session,
 	store GuildStorage,
-	openPlayer func(idleChannelID string) GuildPlayer,
+	openPlayer func(idleChannelID string, buttons []status.Button) GuildPlayer,
 	commands []command,
 	plugins []plugins.Plugin,
 ) *Guild {
@@ -161,10 +164,39 @@ func NewGuild(
 		guildOwnerID: guild.OwnerID,
 		discord:      discord,
 		store:        store,
-		player:       openPlayer(info.MusicChannel),
 		commands:     commands,
 		plugins:      plugins,
 	}
+
+	buttons := []status.Button{
+		{
+			Emoji: pause.shortcut,
+			Action: func(_ string) {
+				gsvc.player.Pause()
+			},
+		},
+		{
+			Emoji: skip.shortcut,
+			Action: func(_ string) {
+				gsvc.player.Skip()
+			},
+		},
+		{
+			Emoji: requeue.shortcut,
+			Action: func(_ string) {
+				// TODO
+			},
+		},
+		{
+			Emoji: help.shortcut,
+			Action: func(userID string) {
+				// TODO
+			},
+		},
+	}
+
+	gsvc.buttons = buttons
+	gsvc.player = openPlayer(info.MusicChannel, buttons)
 
 	go func(events <-chan GuildEvent) {
 		for evt := range eventChan {
@@ -260,24 +292,9 @@ func (gsvc *GuildService) runAndRespondToMessage(fn serviceFunc, evt MessageEven
 }
 
 // HandleReactEvent may invoke a command corresponding to the reacted emoji
-// if the reaction is to music player's status message or to a previously queued song.
 // musicbot puts its own reactions in these locations so users do not have to guess what emojis do what.
 func (gsvc *GuildService) HandleReactEvent(evt ReactEvent) {
 	emoji := evt.Reaction.Emoji.Name
-
-	// check reaction against the status message
-	nowPlaying, ok := gsvc.player.NowPlaying()
-	if ok &&
-		evt.Reaction.ChannelID == nowPlaying.StatusMessageChannelID &&
-		evt.Reaction.MessageID == nowPlaying.StatusMessageID {
-		for _, cmd := range gsvc.commands {
-			if cmd.shortcut == emoji {
-				cmd.run(gsvc, evt.pseudoMessageEvent(), []string{})
-				return
-			}
-		}
-	}
-
 	if requeue.shortcut != emoji {
 		return
 	}

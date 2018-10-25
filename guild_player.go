@@ -10,7 +10,6 @@ import (
 	"log"
 	"math"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/image/draw"
@@ -19,6 +18,7 @@ import (
 	"github.com/jeffreymkabot/discordvoice"
 	"github.com/jeffreymkabot/discordvoice/discordvoice"
 	"github.com/jeffreymkabot/musicbot/plugins"
+	"github.com/jeffreymkabot/musicbot/status"
 	"github.com/jonas747/dca"
 )
 
@@ -47,7 +47,6 @@ type GuildPlayer interface {
 	Pause()
 	Clear()
 	Close() error
-	NowPlaying() (Play, bool)
 	Playlist() []string
 }
 
@@ -62,32 +61,29 @@ type guildPlayer struct {
 	guildID string
 	discord *discordgo.Session
 	device  *discordvoice.Device
+	status  *status.View
 	*player.Player
-	cmdShortcuts []string
-	mu           sync.Mutex // protect statusMessageRef
-	// TODO how to manage statusMessageRef state in a reasonable way without mutex?
-	// player state controlled by discordvoice#sender goroutine
-	// guild state controlled by musicbot#Guild goroutine
-	statusMessageRef Play
 }
 
 // NewGuildPlayer creates a GuildPlayer resource for a discord guild.
 // Existing open GuildPlayers for the same guild should be closed before making a new one to avoid interference.
-func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID string, cmdShortcuts []string) GuildPlayer {
+func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID string, buttons []status.Button) GuildPlayer {
 	gp := &guildPlayer{
-		guildID:      guildID,
-		discord:      discord,
-		device:       discordvoice.New(discord, guildID, 150*time.Millisecond),
-		Player:       nil,
-		cmdShortcuts: cmdShortcuts,
+		guildID: guildID,
+		discord: discord,
+		device:  discordvoice.New(discord, guildID, 1*time.Second),
+		status:  status.NewView(discord, buttons),
+		Player:  nil,
 	}
+
 	// clear the current status message and join the idle channel
 	idle := func() {
-		gp.clearStatusMessage()
+		gp.status.Clear()
 		if discordvoice.ValidVoiceChannel(discord, idleChannelID) {
 			discord.ChannelVoiceJoin(guildID, idleChannelID, false, true)
 		}
 	}
+
 	gp.Player = player.New(
 		player.QueueLength(10),
 		player.IdleFunc(idle, 1000),
@@ -96,7 +92,7 @@ func NewGuildPlayer(guildID string, discord *discordgo.Session, idleChannelID st
 }
 
 func (gp *guildPlayer) Close() error {
-	gp.clearStatusMessage()
+	gp.status.Dispose()
 	return gp.Player.Close()
 }
 
@@ -138,7 +134,10 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 	onStateChange := func(state embedConfig, video io.Reader) {
 		state.image = video
 		statusEmbed(embed, state)
-		gp.updateStatusMessage(statusChannelID, embed, md)
+		err := gp.status.Render(statusChannelID, embed)
+		if err != nil {
+			log.Printf("failed to render status %v", err)
+		}
 	}
 
 	return gp.Enqueue(
@@ -182,74 +181,6 @@ func (gp *guildPlayer) Put(evt MessageEvent, voiceChannelID string, md plugins.M
 			gp.discord.MessageReactionAdd(evt.Message.ChannelID, evt.Message.ID, requeue.shortcut)
 		}),
 	)
-}
-
-// call this in a separate goroutine than discordvoice#sender since it makes blocking http requests
-func (gp *guildPlayer) updateStatusMessage(channelID string, embed *discordgo.MessageEmbed, md plugins.Metadata) error {
-	gp.mu.Lock()
-	chID, msgID := gp.statusMessageRef.StatusMessageChannelID, gp.statusMessageRef.StatusMessageID
-	gp.mu.Unlock()
-
-	exists := chID != "" && msgID != ""
-	differentChannel := chID != channelID
-	tooFarBack := func() bool {
-		msgs, err := gp.discord.ChannelMessages(chID, 1, "", msgID, "")
-		return err != nil || len(msgs) > 0
-	}
-	if exists && (differentChannel || tooFarBack()) {
-		gp.clearStatusMessage()
-		exists = false
-	}
-
-	if !exists {
-		msg, err := gp.discord.ChannelMessageSendEmbed(channelID, embed)
-		if err != nil {
-			log.Printf("failed to display player status %v", err)
-			return err
-		}
-
-		gp.mu.Lock()
-		gp.statusMessageRef = Play{
-			Metadata:               md,
-			StatusMessageChannelID: msg.ChannelID,
-			StatusMessageID:        msg.ID,
-		}
-		gp.mu.Unlock()
-
-		for _, emoji := range gp.cmdShortcuts {
-			if err := gp.discord.MessageReactionAdd(msg.ChannelID, msg.ID, emoji); err != nil {
-				log.Printf("failed to attach cmd shortcut to player status %v", err)
-			}
-		}
-	} else {
-		msg, err := gp.discord.ChannelMessageEditEmbed(channelID, msgID, embed)
-		if err != nil {
-			log.Printf("failed to edit player status %v", err)
-			return err
-		}
-
-		gp.mu.Lock()
-		gp.statusMessageRef = Play{
-			Metadata:               md,
-			StatusMessageChannelID: msg.ChannelID,
-			StatusMessageID:        msg.ID,
-		}
-		gp.mu.Unlock()
-	}
-
-	return nil
-}
-
-func (gp *guildPlayer) clearStatusMessage() error {
-	gp.mu.Lock()
-	chID, msgID := gp.statusMessageRef.StatusMessageChannelID, gp.statusMessageRef.StatusMessageID
-	gp.statusMessageRef = Play{}
-	gp.mu.Unlock()
-
-	if chID == "" || msgID == "" {
-		return nil
-	}
-	return gp.discord.ChannelMessageDelete(chID, msgID)
 }
 
 func openSrcFunc(openFunc func() (io.ReadCloser, error), loudness float64) player.SourceOpenerFunc {
@@ -296,10 +227,10 @@ func statusEmbed(embed *discordgo.MessageEmbed, state embedConfig) *discordgo.Me
 		img, _, err := image.Decode(state.image)
 		if err == nil {
 			// TODO determine optimal values
-			asciiString := ascii(grayscale(resize(img, 30, 15)))
-			desc.WriteString("```\n")
+			asciiString := ascii(grayscale(resize(img, asciiWidth, asciiHeight)))
+			desc.WriteString("\n`")
 			desc.WriteString(asciiString)
-			desc.WriteString("\n```")
+			desc.WriteString("`")
 		} else {
 			log.Printf("failed to decode image %v", err)
 		}
@@ -327,14 +258,10 @@ func statusEmbed(embed *discordgo.MessageEmbed, state embedConfig) *discordgo.Me
 	return embed
 }
 
-func (gp *guildPlayer) NowPlaying() (play Play, ok bool) {
-	gp.mu.Lock()
-	defer gp.mu.Unlock()
-	if gp.statusMessageRef.StatusMessageID == "" {
-		return Play{}, false
-	}
-	return gp.statusMessageRef, true
-}
+const (
+	asciiWidth  = 66
+	asciiHeight = 30
+)
 
 // values taken from golang.org/pkg/image/draw example
 // colorset and charset need the same length

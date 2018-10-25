@@ -117,7 +117,7 @@ var reconnect = command{
 			gsvc.guildID,
 			gsvc.discord,
 			gsvc.MusicChannel,
-			commandShortcuts(gsvc.commands),
+			gsvc.buttons,
 		)
 		return nil
 	},
@@ -170,11 +170,7 @@ var requeue = command{
 	shortcut:        "🔂",
 	ack:             "☑",
 	run: func(gsvc *GuildService, evt MessageEvent, args []string) error {
-		play, ok := gsvc.player.NowPlaying()
-		if !ok {
-			return errors.New("nothing playing")
-		}
-		return gsvc.player.Put(evt, gsvc.MusicChannel, play.Metadata, gsvc.Loudness)
+		return errors.New("not implemented")
 	},
 }
 

@@ -4,6 +4,8 @@ import (
 	"log"
 	"strings"
 
+	"github.com/jeffreymkabot/musicbot/status"
+
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -20,12 +22,13 @@ func onGuildCreate(b *Bot) func(*discordgo.Session, *discordgo.GuildCreate) {
 
 		// alternative is to lookup guild in database here and resolve idlechannel immediately,
 		// would have to lookup guild twice or pass info into guild fn
-		openPlayer := func(idleChannelID string) GuildPlayer {
+
+		openPlayer := func(idleChannelID string, buttons []status.Button) GuildPlayer {
 			return NewGuildPlayer(
 				guildID,
 				b.discord,
 				idleChannelID,
-				commandShortcuts(b.commands),
+				buttons,
 			)
 		}
 

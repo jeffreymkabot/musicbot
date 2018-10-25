@@ -37,7 +37,7 @@ func New(token string, dbPath string, soundcloud string, youtube string) (*Bot, 
 		db.Close()
 		return nil, err
 	}
-	discord.LogLevel = discordgo.LogWarning
+	discord.LogLevel = discordgo.LogInformational
 
 	b := &Bot{
 		quit:    make(chan struct{}),
